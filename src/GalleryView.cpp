@@ -165,15 +165,24 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
 }
 
 void GalleryView::mouseMoveEvent(QMouseEvent* event) {
-    if ((event->buttons() & Qt::LeftButton) && !m_dragStartPos.isNull()) {
+    if (!(event->buttons() & Qt::LeftButton)) {
+        m_dragStartPos = QPoint();
+        if (state() != QAbstractItemView::NoState) {
+            setState(QAbstractItemView::NoState);
+        }
+    } else if (!m_dragStartPos.isNull()) {
         const int dist = (event->pos() - m_dragStartPos).manhattanLength();
         if (dist >= QApplication::startDragDistance()) {
             const QModelIndex idx = indexAt(m_dragStartPos);
             if (idx.isValid()) {
                 m_pendingToggleOnRelease = QPersistentModelIndex();
                 m_pendingSingleSelectOnRelease = QPersistentModelIndex();
+                setState(QAbstractItemView::NoState);
+                QMouseEvent fakeRelease(QEvent::MouseButtonRelease, m_dragStartPos, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QListView::mouseReleaseEvent(&fakeRelease);
                 startDragForIndex(idx);
                 m_dragStartPos = QPoint();
+                setState(QAbstractItemView::NoState);
                 return;
             }
         }
@@ -197,6 +206,31 @@ void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
         m_dragStartPos = QPoint();
     }
     QListView::mouseReleaseEvent(event);
+    if (QApplication::mouseButtons() == Qt::NoButton) {
+        if (state() != QAbstractItemView::NoState) {
+            setState(QAbstractItemView::NoState);
+        }
+    }
+}
+
+void GalleryView::enterEvent(QEvent* event) {
+    QListView::enterEvent(event);
+    if (QApplication::mouseButtons() == Qt::NoButton) {
+        m_dragStartPos = QPoint();
+        if (state() != QAbstractItemView::NoState) {
+            setState(QAbstractItemView::NoState);
+        }
+    }
+}
+
+void GalleryView::leaveEvent(QEvent* event) {
+    QListView::leaveEvent(event);
+    if (QApplication::mouseButtons() == Qt::NoButton) {
+        m_dragStartPos = QPoint();
+        if (state() != QAbstractItemView::NoState) {
+            setState(QAbstractItemView::NoState);
+        }
+    }
 }
 
 void GalleryView::startDragFiles(const QStringList& paths) {
