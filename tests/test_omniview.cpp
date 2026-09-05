@@ -16,6 +16,15 @@ using namespace OmniView;
 class TestOmniView : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase() {
+        qRegisterMetaType<OmniView::Stats>("OmniView::Stats");
+        qRegisterMetaType<OmniView::Stats>("Stats");
+        qRegisterMetaType<OmniView::ImageFeatures>("OmniView::ImageFeatures");
+        qRegisterMetaType<OmniView::ImageFeatures>("ImageFeatures");
+        qRegisterMetaType<OmniView::ImageRecord>("OmniView::ImageRecord");
+        qRegisterMetaType<OmniView::ImageRecord>("ImageRecord");
+    }
+
     void testConfig() {
         QCOMPARE(Config::appName(), QStringLiteral("OmniView"));
         QCOMPARE(Config::appId(), QStringLiteral("omniview"));

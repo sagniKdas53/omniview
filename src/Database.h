@@ -5,6 +5,8 @@
 #include <QVector>
 #include <QPair>
 #include <QMap>
+#include <QHash>
+#include <QMetaType>
 #include <QSqlDatabase>
 
 namespace OmniView {
@@ -73,3 +75,6 @@ private:
 };
 
 } // namespace OmniView
+
+Q_DECLARE_METATYPE(OmniView::ImageRecord)
+Q_DECLARE_METATYPE(OmniView::Stats)

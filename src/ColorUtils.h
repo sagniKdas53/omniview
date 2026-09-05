@@ -6,6 +6,7 @@
 #include <QSize>
 #include <QVector>
 #include <QPair>
+#include <QMetaType>
 
 namespace OmniView {
 
@@ -38,8 +39,10 @@ public:
     static ImageFeatures generateThumbnailAndFeatures(
         const QString& sourcePath,
         const QString& targetThumbPath,
-        QSize maxSize = QSize(360, 360)
+        QSize maxSize = QSize(420, 420)
     );
 };
 
 } // namespace OmniView
+
+Q_DECLARE_METATYPE(OmniView::ImageFeatures)

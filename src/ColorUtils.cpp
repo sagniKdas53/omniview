@@ -173,7 +173,7 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
                            : QStringLiteral("JPEG");
 
     QImageWriter writer(targetThumbPath, format.toLatin1());
-    writer.setQuality(85);
+    writer.setQuality(90);
     if (!writer.write(thumb)) {
         // Fallback to JPEG if WEBP writer fails
         if (format == QStringLiteral("WEBP")) {

@@ -103,11 +103,11 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
     ));
 
     for (const auto& item : entries) {
-        q.addBindValue(item.path);
-        q.addBindValue(item.filename);
-        q.addBindValue(item.subfolder);
-        q.addBindValue(item.fileSize);
-        q.addBindValue(item.mtime);
+        q.bindValue(0, item.path);
+        q.bindValue(1, item.filename);
+        q.bindValue(2, item.subfolder);
+        q.bindValue(3, item.fileSize);
+        q.bindValue(4, item.mtime);
         q.exec();
     }
 
@@ -140,7 +140,7 @@ int Database::pruneMissingFiles(const QString& rootDir) {
     QSqlQuery delQ(db);
     delQ.prepare(QStringLiteral("DELETE FROM images WHERE path = ?"));
     for (const QString& p : missing) {
-        delQ.addBindValue(p);
+        delQ.bindValue(0, p);
         delQ.exec();
     }
     db.commit();
@@ -156,7 +156,7 @@ QVector<ImageRecord> Database::getUnindexedPaths() {
     QSqlQuery q(db);
     const QString sql = QStringLiteral(
         "SELECT path, mtime, file_size FROM images "
-        "WHERE indexed = 0 OR thumb_path = '' "
+        "WHERE indexed = 0 OR thumb_path = '' OR thumb_path LIKE '%.jpg' OR thumb_path LIKE '%pixiv_gallery%' "
         "ORDER BY mtime DESC;"
     );
 

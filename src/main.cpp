@@ -15,6 +15,14 @@ int main(int argc, char* argv[]) {
     app.setApplicationDisplayName(OmniView::Config::appTitle());
     app.setDesktopFileName(QStringLiteral("omniview.desktop"));
 
+    // Register custom types for cross-thread Qt signal/slot delivery
+    qRegisterMetaType<OmniView::Stats>("OmniView::Stats");
+    qRegisterMetaType<OmniView::Stats>("Stats");
+    qRegisterMetaType<OmniView::ImageFeatures>("OmniView::ImageFeatures");
+    qRegisterMetaType<OmniView::ImageFeatures>("ImageFeatures");
+    qRegisterMetaType<OmniView::ImageRecord>("OmniView::ImageRecord");
+    qRegisterMetaType<OmniView::ImageRecord>("ImageRecord");
+
     // App Icon
     QString iconPath;
     const QString appDir = QApplication::applicationDirPath();

@@ -51,6 +51,8 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
 
     setupUi();
     applyTheme();
+    refreshFolderList();
+    refreshGallery();
     startScan();
 }
 
