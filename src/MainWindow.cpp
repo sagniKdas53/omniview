@@ -95,6 +95,18 @@ void MainWindow::setupUi() {
     connect(m_view, &GalleryView::openViewerRequested, this, &MainWindow::onOpenViewer);
     connect(m_view, &GalleryView::selectionCountChanged, this, &MainWindow::onSelectionCountChanged);
     connect(m_view, &GalleryView::favoriteToggled, this, &MainWindow::onFavoriteToggled);
+    connect(m_view, &GalleryView::filterToSubfolderRequested, this, [this](const QString& sub) {
+        m_selectedSubfolder = sub;
+        m_favoriteOnly = false;
+        for (int i = 0; i < m_folderList->count(); ++i) {
+            auto* it = m_folderList->item(i);
+            if (it->data(Qt::UserRole).toString() == sub) {
+                m_folderList->setCurrentItem(it);
+                break;
+            }
+        }
+        refreshGallery();
+    });
 
     galleryLayout->addWidget(m_view, 1);
 
@@ -172,7 +184,7 @@ QWidget* MainWindow::createTopBar() {
     layout->addWidget(m_cardSizeSlider);
 
     // Select Mode button
-    m_btnSelectMode = new QPushButton(QStringLiteral("✓ Select"), this);
+    m_btnSelectMode = new QPushButton(QStringLiteral("☑️ Batch Select"), this);
     m_btnSelectMode->setCheckable(true);
     connect(m_btnSelectMode, &QPushButton::clicked, this, &MainWindow::onSelectModeToggled);
     layout->addWidget(m_btnSelectMode);
@@ -228,26 +240,14 @@ QWidget* MainWindow::createBatchToolbar() {
     layout->setContentsMargins(12, 6, 12, 6);
     layout->setSpacing(10);
 
-    m_lblBatchCount = new QLabel(QStringLiteral("0 items selected"), frame);
+    m_lblBatchCount = new QLabel(QStringLiteral("📦 0 items selected"), frame);
     QFont f = m_lblBatchCount->font();
     f.setBold(true);
     m_lblBatchCount->setFont(f);
     layout->addWidget(m_lblBatchCount);
 
-    auto* btnSelectAll = new QPushButton(QStringLiteral("Select All (Ctrl+A)"), frame);
-    connect(btnSelectAll, &QPushButton::clicked, m_view, &GalleryView::selectAllItems);
-    layout->addWidget(btnSelectAll);
-
-    auto* btnCopyFiles = new QPushButton(QStringLiteral("📋 Copy Files"), frame);
-    connect(btnCopyFiles, &QPushButton::clicked, m_view, &GalleryView::copySelectedFiles);
-    layout->addWidget(btnCopyFiles);
-
-    auto* btnCopyPaths = new QPushButton(QStringLiteral("🔗 Copy Paths"), frame);
-    connect(btnCopyPaths, &QPushButton::clicked, m_view, &GalleryView::copySelectedPaths);
-    layout->addWidget(btnCopyPaths);
-
     // Direct Batch Drag Button!
-    m_btnBatchDrag = new DragButton(QStringLiteral("🖐 Drag Selected to Attach"), frame);
+    m_btnBatchDrag = new DragButton(QStringLiteral("📤 Drag to Attach"), frame);
     m_btnBatchDrag->setStyleSheet(QStringLiteral(
         "QPushButton {"
         "    background-color: #4f46e5;"
@@ -263,11 +263,34 @@ QWidget* MainWindow::createBatchToolbar() {
     ));
     layout->addWidget(m_btnBatchDrag);
 
-    layout->addStretch(1);
+    m_btnCopyFiles = new QPushButton(QStringLiteral("📁 Copy Files (Attach)"), frame);
+    connect(m_btnCopyFiles, &QPushButton::clicked, m_view, &GalleryView::copySelectedFiles);
+    layout->addWidget(m_btnCopyFiles);
 
-    auto* btnClear = new QPushButton(QStringLiteral("✕ Clear (Esc)"), frame);
+    m_btnCopyPaths = new QPushButton(QStringLiteral("📋 Copy Paths"), frame);
+    connect(m_btnCopyPaths, &QPushButton::clicked, m_view, &GalleryView::copySelectedPaths);
+    layout->addWidget(m_btnCopyPaths);
+
+    auto* btnSelectAll = new QPushButton(QStringLiteral("✓ Select All"), frame);
+    connect(btnSelectAll, &QPushButton::clicked, m_view, &GalleryView::selectAllItems);
+    layout->addWidget(btnSelectAll);
+
+    auto* btnInvert = new QPushButton(QStringLiteral("🔄 Invert"), frame);
+    connect(btnInvert, &QPushButton::clicked, m_view, &GalleryView::invertSelection);
+    layout->addWidget(btnInvert);
+
+    auto* btnClear = new QPushButton(QStringLiteral("Deselect All"), frame);
     connect(btnClear, &QPushButton::clicked, m_view, &GalleryView::clearAllSelection);
     layout->addWidget(btnClear);
+
+    layout->addStretch(1);
+
+    auto* btnExit = new QPushButton(QStringLiteral("✕ Exit Select Mode"), frame);
+    connect(btnExit, &QPushButton::clicked, this, [this]() {
+        m_btnSelectMode->setChecked(false);
+        onSelectModeToggled();
+    });
+    layout->addWidget(btnExit);
 
     return frame;
 }
@@ -548,9 +571,15 @@ void MainWindow::onCardSizeChanged(int value) {
 void MainWindow::onSelectModeToggled() {
     m_selectMode = m_btnSelectMode->isChecked();
     m_view->setSelectMode(m_selectMode);
-    if (!m_selectMode) {
-        m_view->clearAllSelection();
-        m_batchBar->hide();
+    const int count = m_view->getSelectedPaths().size();
+    if (m_selectMode) {
+        m_btnSelectMode->setText(count > 0 ? QStringLiteral("☑️ Selecting (%1)").arg(count) : QStringLiteral("☑️ Selecting..."));
+        m_batchBar->show();
+    } else {
+        m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+        if (count == 0) {
+            m_batchBar->hide();
+        }
     }
 }
 
@@ -572,14 +601,29 @@ void MainWindow::onFolderSearchChanged(const QString& /*text*/) {
 }
 
 void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
-    if (count > 0 && m_selectMode) {
-        m_lblBatchCount->setText(QStringLiteral("%1 items selected").arg(count));
-        m_batchBar->show();
-        if (!paths.isEmpty()) {
-            m_btnBatchDrag->setFilePath(paths.first());
+    if (count > 0) {
+        m_lblBatchCount->setText(count == 1 ? QStringLiteral("📦 1 item selected") : QStringLiteral("📦 %1 items selected").arg(count));
+        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach (%1)").arg(count));
+        m_btnBatchDrag->setFilePaths(paths);
+        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (%1)").arg(count));
+        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths (%1)").arg(count));
+        if (m_selectMode) {
+            m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (%1)").arg(count));
         }
+        m_batchBar->show();
     } else {
-        m_batchBar->hide();
+        m_lblBatchCount->setText(QStringLiteral("📦 0 items selected"));
+        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach"));
+        m_btnBatchDrag->setFilePaths(QStringList());
+        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (Attach)"));
+        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths"));
+        if (m_selectMode) {
+            m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (0)"));
+            m_batchBar->show();
+        } else {
+            m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+            m_batchBar->hide();
+        }
     }
 }
 

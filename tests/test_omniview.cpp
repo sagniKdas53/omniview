@@ -8,6 +8,8 @@
 #include "ColorUtils.h"
 #include "Database.h"
 #include "GalleryModel.h"
+#include "GalleryView.h"
+#include "ViewerWindow.h"
 
 using namespace OmniView;
 
@@ -132,6 +134,55 @@ private slots:
 
         QCOMPARE(model.rowForPath(QStringLiteral("/p2.jpg")), 1);
         QCOMPARE(model.rowForPath(QStringLiteral("/nonexistent")), -1);
+    }
+
+    void testDragButton() {
+        DragButton btn(QStringLiteral("Test"));
+        btn.setFilePath(QStringLiteral("/tmp/a.jpg"));
+        QCOMPARE(btn.filePath(), QStringLiteral("/tmp/a.jpg"));
+        QCOMPARE(btn.filePaths(), QStringList{QStringLiteral("/tmp/a.jpg")});
+
+        const QStringList multi = {QStringLiteral("/tmp/1.jpg"), QStringLiteral("/tmp/2.png")};
+        btn.setFilePaths(multi);
+        QCOMPARE(btn.filePaths(), multi);
+        QCOMPARE(btn.filePath(), QStringLiteral("/tmp/1.jpg"));
+    }
+
+    void testGalleryViewSelectionAndInvert() {
+        GalleryView view(nullptr);
+        GalleryModel model;
+        QVector<ImageRecord> items;
+        for (int i = 0; i < 5; ++i) {
+            ImageRecord rec;
+            rec.path = QStringLiteral("/media/img%1.jpg").arg(i);
+            rec.filename = QStringLiteral("img%1.jpg").arg(i);
+            items.append(rec);
+        }
+        model.setItems(items);
+        view.setModel(&model);
+        view.setSelectMode(true);
+
+        auto* sel = view.selectionModel();
+        QVERIFY(sel != nullptr);
+
+        // Select items 0, 1, 2
+        for (int r : {0, 1, 2}) {
+            sel->select(model.index(r, 0), QItemSelectionModel::Select);
+        }
+        QCOMPARE(view.getSelectedRows(), (QVector<int>{0, 1, 2}));
+        QCOMPARE(view.getSelectedPaths().size(), 3);
+
+        // Invert selection -> items 3 and 4 should be selected
+        view.invertSelection();
+        QCOMPARE(view.getSelectedRows(), (QVector<int>{3, 4}));
+
+        // Select all
+        view.selectAllItems();
+        QCOMPARE(view.getSelectedRows().size(), 5);
+
+        // Clear selection
+        view.clearAllSelection();
+        QCOMPARE(view.getSelectedRows().size(), 0);
     }
 };
 

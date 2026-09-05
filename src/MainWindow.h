@@ -105,6 +105,8 @@ private:
     QFrame* m_batchBar = nullptr;
     QLabel* m_lblBatchCount = nullptr;
     DragButton* m_btnBatchDrag = nullptr;
+    QPushButton* m_btnCopyFiles = nullptr;
+    QPushButton* m_btnCopyPaths = nullptr;
 
     // Watcher & Debounce
     QFileSystemWatcher* m_fsWatcher = nullptr;

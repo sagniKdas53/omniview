@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QPainterPath>
+#include <QDesktopServices>
 
 namespace OmniView {
 
@@ -87,6 +88,39 @@ void GalleryView::selectAllItems() {
 void GalleryView::clearAllSelection() {
     if (selectionModel()) {
         selectionModel()->clearSelection();
+    }
+}
+
+void GalleryView::invertSelection() {
+    if (!model() || !selectionModel()) return;
+    const int count = model()->rowCount();
+    for (int r = 0; r < count; ++r) {
+        const QModelIndex idx = model()->index(r, 0);
+        selectionModel()->select(idx, QItemSelectionModel::Toggle);
+    }
+}
+
+void GalleryView::copyImageBitmap(const QString& path) {
+    QImage img(path);
+    if (!img.isNull()) {
+        QApplication::clipboard()->setImage(img);
+    }
+}
+
+void GalleryView::copySelectedImage() {
+    const QStringList paths = getSelectedPaths();
+    if (!paths.isEmpty()) {
+        copyImageBitmap(paths.first());
+    } else {
+        const QModelIndex idx = currentIndex();
+        if (idx.isValid()) {
+            const auto* gModel = qobject_cast<const GalleryModel*>(model());
+            if (gModel) {
+                if (const auto* it = gModel->getItem(idx.row())) {
+                    copyImageBitmap(it->path);
+                }
+            }
+        }
     }
 }
 
@@ -165,22 +199,7 @@ void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
     QListView::mouseReleaseEvent(event);
 }
 
-void GalleryView::startDragForIndex(const QModelIndex& index) {
-    const auto* gModel = qobject_cast<const GalleryModel*>(model());
-    if (!gModel) return;
-
-    const auto* item = gModel->getItem(index.row());
-    if (!item) return;
-
-    const QVector<int> selectedRows = getSelectedRows();
-    QStringList paths;
-    if (selectedRows.contains(index.row()) && selectedRows.size() > 1) {
-        paths = getSelectedPaths();
-    } else {
-        paths.append(item->path);
-    }
-
-    // Filter valid files
+void GalleryView::startDragFiles(const QStringList& paths) {
     QStringList validPaths;
     for (const QString& p : paths) {
         if (QFile::exists(p)) {
@@ -210,8 +229,18 @@ void GalleryView::startDragForIndex(const QModelIndex& index) {
     const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
     mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
 
+    // Pre-populate clipboard so user can also instant-paste
+    QApplication::clipboard()->setMimeData(mimeData);
+
     // 4. Create drag thumbnail badge
-    QPixmap thumbPix = m_thumbMgr ? m_thumbMgr->getCachedPixmap(item->path) : QPixmap();
+    QPixmap thumbPix;
+    if (m_thumbMgr) {
+        thumbPix = m_thumbMgr->getCachedPixmap(validPaths.first());
+    }
+    if (thumbPix.isNull()) {
+        thumbPix.load(validPaths.first());
+    }
+
     const int badgeMax = 120;
     if (!thumbPix.isNull()) {
         const QPixmap scaled = thumbPix.scaled(badgeMax, badgeMax, Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -229,7 +258,7 @@ void GalleryView::startDragForIndex(const QModelIndex& index) {
         p.drawPixmap(6, 6, scaled);
 
         if (validPaths.size() > 1) {
-            const QString countStr = QStringLiteral("%1 files").arg(validPaths.size());
+            const QString countStr = QStringLiteral("📦 %1 files").arg(validPaths.size());
             QFont f = p.font();
             f.setBold(true);
             f.setPointSize(9);
@@ -251,6 +280,23 @@ void GalleryView::startDragForIndex(const QModelIndex& index) {
 
     drag->setMimeData(mimeData);
     drag->exec(Qt::CopyAction);
+}
+
+void GalleryView::startDragForIndex(const QModelIndex& index) {
+    const auto* gModel = qobject_cast<const GalleryModel*>(model());
+    if (!gModel) return;
+
+    const auto* item = gModel->getItem(index.row());
+    if (!item) return;
+
+    const QVector<int> selectedRows = getSelectedRows();
+    QStringList paths;
+    if (selectedRows.contains(index.row()) && selectedRows.size() > 1) {
+        paths = getSelectedPaths();
+    } else {
+        paths.append(item->path);
+    }
+    startDragFiles(paths);
 }
 
 void GalleryView::mouseDoubleClickEvent(QMouseEvent* event) {
@@ -350,7 +396,7 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
     if (!gModel) return;
 
     const QStringList selectedPaths = getSelectedPaths();
-    const bool isMulti = selectedPaths.size() > 1;
+    const bool isMulti = selectedPaths.size() > 1 && (idx.isValid() && selectedPaths.contains(gModel->getItem(idx.row())->path));
 
     QMenu menu(this);
     if (m_darkMode) {
@@ -370,18 +416,107 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
             "    background-color: #4f46e5;"
             "    color: #ffffff;"
             "}"
+            "QMenu::separator {"
+            "    height: 1px;"
+            "    background-color: #334155;"
+            "    margin: 4px 8px;"
+            "}"
+        ));
+    } else {
+        menu.setStyleSheet(QStringLiteral(
+            "QMenu {"
+            "    background-color: #ffffff;"
+            "    color: #0f172a;"
+            "    border: 1px solid #cbd5e1;"
+            "    border-radius: 6px;"
+            "    padding: 4px;"
+            "}"
+            "QMenu::item {"
+            "    padding: 6px 20px 6px 12px;"
+            "    border-radius: 4px;"
+            "}"
+            "QMenu::item:selected {"
+            "    background-color: #4f46e5;"
+            "    color: #ffffff;"
+            "}"
+            "QMenu::separator {"
+            "    height: 1px;"
+            "    background-color: #e2e8f0;"
+            "    margin: 4px 8px;"
+            "}"
         ));
     }
 
-    if (idx.isValid()) {
+    if (isMulti) {
+        auto* actCount = menu.addAction(QStringLiteral("📦 %1 files selected").arg(selectedPaths.size()));
+        actCount->setEnabled(false);
+
+        auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach (%1 files)").arg(selectedPaths.size()));
+        connect(actDrag, &QAction::triggered, this, [this, selectedPaths]() {
+            startDragFiles(selectedPaths);
+        });
+
+        menu.addSeparator();
+
+        auto* actCopyFiles = menu.addAction(QStringLiteral("📁 Copy %1 Files (Attach) (Ctrl+C)").arg(selectedPaths.size()));
+        connect(actCopyFiles, &QAction::triggered, this, &GalleryView::copySelectedFiles);
+
+        auto* actCopyPaths = menu.addAction(QStringLiteral("📋 Copy %1 File Paths (Ctrl+Shift+C)").arg(selectedPaths.size()));
+        connect(actCopyPaths, &QAction::triggered, this, &GalleryView::copySelectedPaths);
+
+        menu.addSeparator();
+
+        auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
+        connect(actInvert, &QAction::triggered, this, &GalleryView::invertSelection);
+
+        auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
+        connect(actClear, &QAction::triggered, this, &GalleryView::clearAllSelection);
+
+    } else if (idx.isValid()) {
         const auto* item = gModel->getItem(idx.row());
         if (item) {
+            const QString path = item->path;
+            const bool isSelected = selectionModel() && selectionModel()->isSelected(idx);
+
             auto* actOpen = menu.addAction(QStringLiteral("🔍 Open in Viewer (Return)"));
             connect(actOpen, &QAction::triggered, this, [this, item, idx]() {
                 emit openViewerRequested(*item, idx.row());
             });
 
+            auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach"));
+            connect(actDrag, &QAction::triggered, this, [this, path]() {
+                startDragFiles(QStringList{path});
+            });
+
+            auto* actToggleSel = menu.addAction(isSelected ? QStringLiteral("☑️ Deselect") : QStringLiteral("☑️ Select"));
+            connect(actToggleSel, &QAction::triggered, this, [this, idx, isSelected]() {
+                if (selectionModel()) {
+                    selectionModel()->select(idx, isSelected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select);
+                }
+            });
+
             menu.addSeparator();
+
+            auto* actCopyFile = menu.addAction(QStringLiteral("📁 Copy File (Attach) (Ctrl+C)"));
+            connect(actCopyFile, &QAction::triggered, this, &GalleryView::copySelectedFiles);
+
+            auto* actCopyPath = menu.addAction(QStringLiteral("📋 Copy File Path (Ctrl+Shift+C)"));
+            connect(actCopyPath, &QAction::triggered, this, &GalleryView::copySelectedPaths);
+
+            auto* actCopyImg = menu.addAction(QStringLiteral("🖼️ Copy Image Bitmap"));
+            connect(actCopyImg, &QAction::triggered, this, [this, path]() {
+                copyImageBitmap(path);
+            });
+
+            menu.addSeparator();
+
+            if (!item->subfolder.isEmpty()) {
+                const QString sub = item->subfolder;
+                auto* actFolder = menu.addAction(QStringLiteral("📂 Show Only Folder: %1").arg(sub));
+                connect(actFolder, &QAction::triggered, this, [this, sub]() {
+                    emit filterToSubfolderRequested(sub);
+                });
+            }
 
             auto* actFav = menu.addAction(item->isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
             connect(actFav, &QAction::triggered, this, [this, idx, item]() {
@@ -390,26 +525,30 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
 
             menu.addSeparator();
 
-            auto* actShowFolder = menu.addAction(QStringLiteral("📁 Show in File Manager"));
-            connect(actShowFolder, &QAction::triggered, this, [item]() {
-                QFileInfo fi(item->path);
-                QProcess::startDetached(QStringLiteral("xdg-open"), QStringList() << fi.absolutePath());
+            auto* actOpenDef = menu.addAction(QStringLiteral("↗️ Open in Default Viewer"));
+            connect(actOpenDef, &QAction::triggered, this, [path]() {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+            });
+
+            auto* actReveal = menu.addAction(QStringLiteral("🗂️ Reveal in File Manager"));
+            connect(actReveal, &QAction::triggered, this, [path]() {
+                const QFileInfo fi(path);
+                if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), path})) {
+                    if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), path})) {
+                        QProcess::startDetached(QStringLiteral("xdg-open"), QStringList{fi.absolutePath()});
+                    }
+                }
             });
         }
-    }
+    } else {
+        auto* actSelectAll = menu.addAction(QStringLiteral("✓ Select All (Ctrl+A)"));
+        connect(actSelectAll, &QAction::triggered, this, &GalleryView::selectAllItems);
 
-    if (isMulti) {
-        auto* actCopyFiles = menu.addAction(QStringLiteral("📋 Copy %1 Files (Ctrl+C)").arg(selectedPaths.size()));
-        connect(actCopyFiles, &QAction::triggered, this, &GalleryView::copySelectedFiles);
+        auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
+        connect(actInvert, &QAction::triggered, this, &GalleryView::invertSelection);
 
-        auto* actCopyPaths = menu.addAction(QStringLiteral("🔗 Copy %1 File Paths (Ctrl+Shift+C)").arg(selectedPaths.size()));
-        connect(actCopyPaths, &QAction::triggered, this, &GalleryView::copySelectedPaths);
-    } else if (idx.isValid()) {
-        auto* actCopyFile = menu.addAction(QStringLiteral("📋 Copy File (Ctrl+C)"));
-        connect(actCopyFile, &QAction::triggered, this, &GalleryView::copySelectedFiles);
-
-        auto* actCopyPath = menu.addAction(QStringLiteral("🔗 Copy File Path (Ctrl+Shift+C)"));
-        connect(actCopyPath, &QAction::triggered, this, &GalleryView::copySelectedPaths);
+        auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
+        connect(actClear, &QAction::triggered, this, &GalleryView::clearAllSelection);
     }
 
     menu.exec(event->globalPos());

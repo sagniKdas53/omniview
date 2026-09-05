@@ -25,15 +25,21 @@ public:
 
     void selectAllItems();
     void clearAllSelection();
+    void invertSelection();
+
+    void copyImageBitmap(const QString& path);
+    void startDragFiles(const QStringList& paths);
 
 signals:
     void openViewerRequested(const ImageRecord& item, int row);
     void selectionCountChanged(int count, const QStringList& paths);
     void favoriteToggled(int row, const QString& path);
+    void filterToSubfolderRequested(const QString& subfolder);
 
 public slots:
     void copySelectedFiles();
     void copySelectedPaths();
+    void copySelectedImage();
 
 protected:
     void selectionChanged(const QItemSelection& selected, const QItemSelection& deselected) override;

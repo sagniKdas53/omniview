@@ -16,6 +16,9 @@
 #include <QProcess>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QDesktopServices>
+#include <QPainter>
+#include <QPainterPath>
 #include <QtMath>
 
 namespace OmniView {
@@ -35,22 +38,75 @@ void DragButton::mousePressEvent(QMouseEvent* event) {
 }
 
 void DragButton::mouseMoveEvent(QMouseEvent* event) {
-    if ((event->buttons() & Qt::LeftButton) && !m_dragStartPos.isNull() && !m_filePath.isEmpty()) {
+    if ((event->buttons() & Qt::LeftButton) && !m_dragStartPos.isNull()) {
         const int dist = (event->pos() - m_dragStartPos).manhattanLength();
         if (dist >= QApplication::startDragDistance()) {
-            if (QFile::exists(m_filePath)) {
+            QStringList paths = m_filePaths;
+            if (paths.isEmpty() && !m_filePath.isEmpty()) {
+                paths.append(m_filePath);
+            }
+            QStringList validPaths;
+            for (const QString& p : paths) {
+                if (QFile::exists(p)) {
+                    validPaths.append(p);
+                }
+            }
+            if (!validPaths.isEmpty()) {
                 auto* drag = new QDrag(this);
                 auto* mimeData = new QMimeData();
-                const QList<QUrl> urls = {QUrl::fromLocalFile(m_filePath)};
+                QList<QUrl> urls;
+                for (const QString& p : validPaths) {
+                    urls.append(QUrl::fromLocalFile(p));
+                }
                 mimeData->setUrls(urls);
-                mimeData->setText(m_filePath);
-                const QByteArray gnomeData = "copy\n" + urls[0].toString().toUtf8();
+                mimeData->setText(validPaths.join(QStringLiteral("\n")));
+                QStringList urlStrings;
+                for (const QUrl& u : urls) {
+                    urlStrings.append(u.toString());
+                }
+                const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
                 mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
 
-                // Small thumbnail preview
-                QPixmap preview(m_filePath);
+                // Pre-populate clipboard for instant paste
+                QApplication::clipboard()->setMimeData(mimeData);
+
+                // Thumbnail badge preview
+                QPixmap preview(validPaths.first());
+                const int badgeMax = 120;
                 if (!preview.isNull()) {
-                    drag->setPixmap(preview.scaled(100, 100, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    const QPixmap scaled = preview.scaled(badgeMax, badgeMax, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    QPixmap badge(scaled.width() + 12, scaled.height() + 12);
+                    badge.fill(Qt::transparent);
+
+                    QPainter p(&badge);
+                    p.setRenderHint(QPainter::Antialiasing, true);
+
+                    QPainterPath shape;
+                    shape.addRoundedRect(QRectF(1, 1, scaled.width() + 10, scaled.height() + 10), 8, 8);
+                    p.fillPath(shape, QColor(20, 24, 38, 230));
+                    p.setPen(QPen(QColor(99, 102, 241), 2));
+                    p.drawPath(shape);
+                    p.drawPixmap(6, 6, scaled);
+
+                    if (validPaths.size() > 1) {
+                        const QString countStr = QStringLiteral("📦 %1 files").arg(validPaths.size());
+                        QFont f = p.font();
+                        f.setBold(true);
+                        f.setPointSize(9);
+                        p.setFont(f);
+                        QFontMetrics fm(f);
+                        const int pillW = fm.horizontalAdvance(countStr) + 12;
+                        const QRectF pill(badge.width() - pillW - 4, badge.height() - 22, pillW, 18);
+                        QPainterPath pp;
+                        pp.addRoundedRect(pill, 6, 6);
+                        p.fillPath(pp, QColor(79, 70, 229, 240));
+                        p.setPen(QColor(255, 255, 255));
+                        p.drawText(pill, Qt::AlignCenter, countStr);
+                    }
+                    p.end();
+
+                    drag->setPixmap(badge);
+                    drag->setHotSpot(QPoint(badge.width() / 2, badge.height() / 2));
                 }
                 drag->setMimeData(mimeData);
                 drag->exec(Qt::CopyAction);
@@ -135,16 +191,34 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     toolLayout->addWidget(m_btnFav);
 
     auto* btnCopyFile = new QPushButton(QStringLiteral("📋 File"), this);
+    btnCopyFile->setToolTip(QStringLiteral("Copy file for pasting into chat or file manager"));
     connect(btnCopyFile, &QPushButton::clicked, this, &ViewerWindow::copyFile);
     toolLayout->addWidget(btnCopyFile);
 
     auto* btnCopyPath = new QPushButton(QStringLiteral("🔗 Path"), this);
+    btnCopyPath->setToolTip(QStringLiteral("Copy file path to clipboard"));
     connect(btnCopyPath, &QPushButton::clicked, this, &ViewerWindow::copyPath);
     toolLayout->addWidget(btnCopyPath);
 
+    auto* btnCopyImg = new QPushButton(QStringLiteral("🖼️ Image"), this);
+    btnCopyImg->setToolTip(QStringLiteral("Copy raw image bitmap to clipboard"));
+    connect(btnCopyImg, &QPushButton::clicked, this, &ViewerWindow::copyImage);
+    toolLayout->addWidget(btnCopyImg);
+
+    auto* btnOpenDef = new QPushButton(QStringLiteral("↗️ Open"), this);
+    btnOpenDef->setToolTip(QStringLiteral("Open in default system viewer"));
+    connect(btnOpenDef, &QPushButton::clicked, this, &ViewerWindow::openDefaultViewer);
+    toolLayout->addWidget(btnOpenDef);
+
     auto* btnShowFolder = new QPushButton(QStringLiteral("📁 Folder"), this);
+    btnShowFolder->setToolTip(QStringLiteral("Reveal in file manager"));
     connect(btnShowFolder, &QPushButton::clicked, this, &ViewerWindow::showInFolder);
     toolLayout->addWidget(btnShowFolder);
+
+    auto* btnClose = new QPushButton(QStringLiteral("✕ Close"), this);
+    btnClose->setToolTip(QStringLiteral("Close viewer (Esc)"));
+    connect(btnClose, &QPushButton::clicked, this, &QWidget::close);
+    toolLayout->addWidget(btnClose);
 
     toolLayout->addStretch(1);
 
@@ -161,6 +235,9 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     m_imageLabel = new QLabel(m_scrollArea);
     m_imageLabel->setAlignment(Qt::AlignCenter);
     m_scrollArea->setWidget(m_imageLabel);
+
+    m_scrollArea->viewport()->installEventFilter(this);
+    m_imageLabel->installEventFilter(this);
 
     mainLayout->addWidget(m_scrollArea, 1);
 
@@ -339,6 +416,16 @@ void ViewerWindow::copyPath() {
     QApplication::clipboard()->setText(m_items[m_currentIndex].path);
 }
 
+void ViewerWindow::copyImage() {
+    if (m_currentImage.isNull()) return;
+    QApplication::clipboard()->setImage(m_currentImage);
+}
+
+void ViewerWindow::openDefaultViewer() {
+    if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(m_items[m_currentIndex].path));
+}
+
 void ViewerWindow::toggleFavorite() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
     auto& item = m_items[m_currentIndex];
@@ -349,8 +436,14 @@ void ViewerWindow::toggleFavorite() {
 
 void ViewerWindow::showInFolder() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    const QFileInfo fi(m_items[m_currentIndex].path);
-    QProcess::startDetached(QStringLiteral("xdg-open"), QStringList() << fi.absolutePath());
+    const QString p = m_items[m_currentIndex].path;
+    const QFileInfo fi(p);
+    // Try dolphin, nautilus, fallback to xdg-open
+    if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), p})) {
+        if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), p})) {
+            QProcess::startDetached(QStringLiteral("xdg-open"), QStringList{fi.absolutePath()});
+        }
+    }
 }
 
 void ViewerWindow::keyPressEvent(QKeyEvent* event) {
@@ -365,6 +458,13 @@ void ViewerWindow::keyPressEvent(QKeyEvent* event) {
         return;
     case Qt::Key_Escape:
         close();
+        return;
+    case Qt::Key_Space:
+        if (m_fitMode) {
+            zoomOriginal();
+        } else {
+            zoomFit();
+        }
         return;
     case Qt::Key_Plus:
     case Qt::Key_Equal:
@@ -406,6 +506,47 @@ void ViewerWindow::resizeEvent(QResizeEvent* event) {
     if (m_fitMode) {
         updateDisplay();
     }
+}
+
+bool ViewerWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_scrollArea->viewport() || watched == m_imageLabel) {
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                if (m_fitMode) {
+                    zoomOriginal();
+                } else {
+                    zoomFit();
+                }
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_panning = true;
+                m_panStartPos = me->globalPos();
+                m_scrollArea->viewport()->setCursor(Qt::ClosedHandCursor);
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (m_panning && (me->buttons() & Qt::LeftButton)) {
+                const QPoint delta = me->globalPos() - m_panStartPos;
+                m_panStartPos = me->globalPos();
+                m_scrollArea->horizontalScrollBar()->setValue(m_scrollArea->horizontalScrollBar()->value() - delta.x());
+                m_scrollArea->verticalScrollBar()->setValue(m_scrollArea->verticalScrollBar()->value() - delta.y());
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && m_panning) {
+                m_panning = false;
+                m_scrollArea->viewport()->setCursor(m_fitMode ? Qt::ArrowCursor : Qt::OpenHandCursor);
+                return true;
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 } // namespace OmniView
