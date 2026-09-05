@@ -1,0 +1,11 @@
+build/
+bin/
+*.o
+*.a
+*.so
+omniview-cpp
+omniview_tests
+CMakeLists.txt.user*
+.vscode/
+.idea/
+*.sublime-*
