@@ -100,10 +100,31 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         m_dragStartPos = event->pos();
         const QModelIndex idx = indexAt(event->pos());
-        if (m_selectMode && idx.isValid()) {
-            selectionModel()->select(idx, QItemSelectionModel::Toggle);
-            setCurrentIndex(idx);
-            return;
+
+        if (m_selectMode) {
+            if (idx.isValid() && selectionModel()) {
+                const bool isAlreadySelected = selectionModel()->isSelected(idx);
+                if (!isAlreadySelected) {
+                    selectionModel()->select(idx, QItemSelectionModel::Select);
+                    selectionModel()->setCurrentIndex(idx, QItemSelectionModel::NoUpdate);
+                    m_pendingToggleOnRelease = QPersistentModelIndex();
+                } else {
+                    m_pendingToggleOnRelease = QPersistentModelIndex(idx);
+                }
+                viewport()->update();
+                return;
+            } else {
+                m_pendingToggleOnRelease = QPersistentModelIndex();
+            }
+        } else {
+            if (idx.isValid() && !(event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
+                const QVector<int> selRows = getSelectedRows();
+                if (selRows.size() > 1 && selRows.contains(idx.row())) {
+                    m_pendingSingleSelectOnRelease = QPersistentModelIndex(idx);
+                    return;
+                }
+            }
+            m_pendingSingleSelectOnRelease = QPersistentModelIndex();
         }
     }
     QListView::mousePressEvent(event);
@@ -115,6 +136,8 @@ void GalleryView::mouseMoveEvent(QMouseEvent* event) {
         if (dist >= QApplication::startDragDistance()) {
             const QModelIndex idx = indexAt(m_dragStartPos);
             if (idx.isValid()) {
+                m_pendingToggleOnRelease = QPersistentModelIndex();
+                m_pendingSingleSelectOnRelease = QPersistentModelIndex();
                 startDragForIndex(idx);
                 m_dragStartPos = QPoint();
                 return;
@@ -122,6 +145,24 @@ void GalleryView::mouseMoveEvent(QMouseEvent* event) {
         }
     }
     QListView::mouseMoveEvent(event);
+}
+
+void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        if (m_pendingToggleOnRelease.isValid() && selectionModel()) {
+            selectionModel()->select(m_pendingToggleOnRelease, QItemSelectionModel::Deselect);
+            selectionModel()->setCurrentIndex(m_pendingToggleOnRelease, QItemSelectionModel::NoUpdate);
+            m_pendingToggleOnRelease = QPersistentModelIndex();
+            viewport()->update();
+        } else if (m_pendingSingleSelectOnRelease.isValid() && selectionModel()) {
+            selectionModel()->select(m_pendingSingleSelectOnRelease, QItemSelectionModel::ClearAndSelect);
+            selectionModel()->setCurrentIndex(m_pendingSingleSelectOnRelease, QItemSelectionModel::NoUpdate);
+            m_pendingSingleSelectOnRelease = QPersistentModelIndex();
+            viewport()->update();
+        }
+        m_dragStartPos = QPoint();
+    }
+    QListView::mouseReleaseEvent(event);
 }
 
 void GalleryView::startDragForIndex(const QModelIndex& index) {
