@@ -41,35 +41,58 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 
     const QRectF cardRect = QRectF(option.rect).adjusted(3, 3, -3, -3);
 
-    // Card Colors
-    QColor bgColor = m_darkMode ? QColor(30, 34, 48) : QColor(255, 255, 255);
-    QColor borderColor = m_darkMode ? QColor(42, 50, 75) : QColor(226, 232, 240);
+    // Card Colors matching omniview-rs
+    QColor bgColor;
+    QColor borderColor;
+    double borderWidth = 1.0;
 
-    if (isSelected) {
-        borderColor = QColor(99, 102, 241); // indigo
-        bgColor = m_darkMode ? QColor(37, 42, 60) : QColor(238, 242, 255);
-    } else if (isHovered) {
-        borderColor = m_darkMode ? QColor(67, 78, 110) : QColor(203, 213, 225);
-        bgColor = m_darkMode ? QColor(34, 39, 55) : QColor(248, 250, 252);
+    if (m_darkMode) {
+        if (isSelected) {
+            bgColor = QColor(18, 38, 62);      // rgb(18, 38, 62)
+            borderColor = QColor(0, 210, 255); // rgb(0, 210, 255)
+            borderWidth = 2.0;
+        } else if (isHovered) {
+            bgColor = QColor(34, 40, 56);      // rgb(34, 40, 56)
+            borderColor = QColor(90, 160, 255);// rgb(90, 160, 255)
+            borderWidth = 1.5;
+        } else {
+            bgColor = QColor(22, 25, 34);      // rgb(22, 25, 34)
+            borderColor = QColor(45, 50, 65);  // rgb(45, 50, 65)
+            borderWidth = 1.0;
+        }
+    } else {
+        if (isSelected) {
+            bgColor = QColor(224, 242, 254);   // rgb(224, 242, 254)
+            borderColor = QColor(0, 210, 255); // rgb(0, 210, 255)
+            borderWidth = 2.0;
+        } else if (isHovered) {
+            bgColor = QColor(235, 242, 252);   // rgb(235, 242, 252)
+            borderColor = QColor(40, 120, 230);// rgb(40, 120, 230)
+            borderWidth = 1.5;
+        } else {
+            bgColor = QColor(248, 250, 252);   // rgb(248, 250, 252)
+            borderColor = QColor(220, 225, 235);// rgb(220, 225, 235)
+            borderWidth = 1.0;
+        }
     }
 
-    // Draw card background
+    // Draw card background with 6px corner radius
     QPainterPath bgPath;
-    bgPath.addRoundedRect(cardRect, 8.0, 8.0);
+    bgPath.addRoundedRect(cardRect, 6.0, 6.0);
     painter->fillPath(bgPath, bgColor);
 
-    painter->setPen(QPen(borderColor, isSelected ? 2.0 : 1.0));
+    painter->setPen(QPen(borderColor, borderWidth));
     painter->drawPath(bgPath);
 
     // Thumbnail Area
-    const double pad = 6.0;
+    const double pad = 5.0;
     const QRectF imgArea(cardRect.left() + pad, cardRect.top() + pad,
                          cardRect.width() - pad * 2, m_cardSize - pad * 2);
 
-    // Subtle thumbnail placeholder background
+    // Thumbnail placeholder background (4px corner radius)
     QPainterPath imgClipPath;
-    imgClipPath.addRoundedRect(imgArea, 6.0, 6.0);
-    painter->fillPath(imgClipPath, m_darkMode ? QColor(20, 23, 33) : QColor(241, 245, 249));
+    imgClipPath.addRoundedRect(imgArea, 4.0, 4.0);
+    painter->fillPath(imgClipPath, m_darkMode ? QColor(28, 32, 44) : QColor(230, 235, 245));
 
     const QString path = index.data(GalleryRoles::PathRole).toString();
     QPixmap pix = m_thumbMgr ? m_thumbMgr->getCachedPixmap(path) : QPixmap();
@@ -78,10 +101,9 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         if (m_thumbMgr) {
             m_thumbMgr->requestPriorityThumbnail(path);
         }
-        // Draw loading placeholder
-        painter->setPen(m_darkMode ? QColor(100, 116, 139) : QColor(148, 163, 184));
+        painter->setPen(m_darkMode ? QColor(80, 95, 120) : QColor(160, 175, 195));
         QFont iconFont = painter->font();
-        iconFont.setPointSize(24);
+        iconFont.setPointSize(22);
         painter->setFont(iconFont);
         painter->drawText(imgArea, Qt::AlignCenter, QStringLiteral("🖼"));
     } else {
@@ -94,22 +116,22 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         painter->restore();
     }
 
-    // Favorite Star
+    // Favorite Star indicator in upper right
     const bool isFav = index.data(GalleryRoles::IsFavoriteRole).toBool();
     if (isFav) {
-        const QRectF starRect(cardRect.right() - 28, cardRect.top() + 8, 22, 22);
+        const QRectF starRect(cardRect.right() - 26, cardRect.top() + 6, 20, 20);
         QPainterPath starPill;
-        starPill.addRoundedRect(starRect, 11, 11);
-        painter->fillPath(starPill, QColor(0, 0, 0, 180));
+        starPill.addRoundedRect(starRect, 10, 10);
+        painter->fillPath(starPill, QColor(0, 0, 0, 160));
         painter->setPen(QColor(250, 204, 21)); // Gold
         QFont f = painter->font();
-        f.setPointSize(11);
+        f.setPointSize(10);
         f.setBold(true);
         painter->setFont(f);
         painter->drawText(starRect, Qt::AlignCenter, QStringLiteral("⭐"));
     }
 
-    // Dimensions badge
+    // Dimensions badge in bottom right of thumbnail
     const int w = index.data(GalleryRoles::WidthRole).toInt();
     const int h = index.data(GalleryRoles::HeightRole).toInt();
     if (w > 0 && h > 0) {
@@ -120,29 +142,29 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
         painter->setFont(f);
         QFontMetrics fm(f);
         const int textW = fm.horizontalAdvance(dimText);
-        const QRectF badgeRect(imgArea.right() - textW - 10, imgArea.bottom() - 18, textW + 8, 16);
+        const QRectF badgeRect(imgArea.right() - textW - 8, imgArea.bottom() - 17, textW + 6, 15);
         QPainterPath bp;
         bp.addRoundedRect(badgeRect, 4, 4);
         painter->fillPath(bp, QColor(0, 0, 0, 170));
-        painter->setPen(QColor(241, 245, 249));
+        painter->setPen(QColor(220, 225, 235));
         painter->drawText(badgeRect, Qt::AlignCenter, dimText);
     }
 
-    // Checkbox in Select Mode
-    if (m_selectMode) {
-        const QRectF cbRect(cardRect.left() + 8, cardRect.top() + 8, 22, 22);
+    // Batch Selection Checkbox Indicator (20×20 with 4px corner radius)
+    if (m_selectMode || isSelected) {
+        const QRectF cbRect(cardRect.left() + 7, cardRect.top() + 7, 20, 20);
         QPainterPath cbPath;
-        cbPath.addRoundedRect(cbRect, 11, 11);
+        cbPath.addRoundedRect(cbRect, 4.0, 4.0);
         if (isSelected) {
-            painter->fillPath(cbPath, QColor(79, 70, 229));
+            painter->fillPath(cbPath, QColor(0, 180, 255)); // rgb(0, 180, 255)
             painter->setPen(QColor(255, 255, 255));
             QFont f = painter->font();
-            f.setPointSize(11);
+            f.setPointSize(10);
             f.setBold(true);
             painter->setFont(f);
             painter->drawText(cbRect, Qt::AlignCenter, QStringLiteral("✓"));
         } else {
-            painter->fillPath(cbPath, QColor(0, 0, 0, 160));
+            painter->fillPath(cbPath, QColor(0, 0, 0, 150));
             painter->setPen(QPen(QColor(255, 255, 255, 200), 1.5));
             painter->drawPath(cbPath);
         }
@@ -160,7 +182,7 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     fTitle.setPointSize(9);
     fTitle.setBold(true);
     painter->setFont(fTitle);
-    painter->setPen(m_darkMode ? QColor(241, 245, 249) : QColor(15, 23, 42));
+    painter->setPen(m_darkMode ? QColor(220, 225, 235) : QColor(30, 40, 55));
 
     QFontMetrics fmTitle(fTitle);
     const QString elidedTitle = fmTitle.elidedText(filename, Qt::ElideMiddle, static_cast<int>(metaRect.width()));

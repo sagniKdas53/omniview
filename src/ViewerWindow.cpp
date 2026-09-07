@@ -142,47 +142,51 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     auto* toolBar = new QWidget(this);
     auto* toolLayout = new QHBoxLayout(toolBar);
     toolLayout->setContentsMargins(12, 6, 12, 6);
-    toolLayout->setSpacing(8);
+    toolLayout->setSpacing(6);
 
-    auto* btnPrev = new QPushButton(QStringLiteral("◀ Prev"), this);
+    auto* btnPrev = new QPushButton(QStringLiteral("◀ Previous (Left)"), this);
+    btnPrev->setToolTip(QStringLiteral("Previous image (Left Arrow)"));
     connect(btnPrev, &QPushButton::clicked, this, &ViewerWindow::showPrevious);
     toolLayout->addWidget(btnPrev);
 
-    auto* btnNext = new QPushButton(QStringLiteral("Next ▶"), this);
+    auto* btnNext = new QPushButton(QStringLiteral("Next (Right) ▶"), this);
+    btnNext->setToolTip(QStringLiteral("Next image (Right Arrow)"));
     connect(btnNext, &QPushButton::clicked, this, &ViewerWindow::showNext);
     toolLayout->addWidget(btnNext);
 
-    toolLayout->addSpacing(12);
+    toolLayout->addSpacing(8);
 
-    auto* btnFit = new QPushButton(QStringLiteral("⛶ Fit"), this);
+    auto* btnFit = new QPushButton(QStringLiteral("Fit to Window (Space)"), this);
+    btnFit->setToolTip(QStringLiteral("Fit image inside window (Space bar)"));
     connect(btnFit, &QPushButton::clicked, this, &ViewerWindow::zoomFit);
     toolLayout->addWidget(btnFit);
 
-    auto* btn100 = new QPushButton(QStringLiteral("1:1"), this);
+    auto* btn100 = new QPushButton(QStringLiteral("1:1 (100%)"), this);
+    btn100->setToolTip(QStringLiteral("View at native resolution"));
     connect(btn100, &QPushButton::clicked, this, &ViewerWindow::zoomOriginal);
     toolLayout->addWidget(btn100);
 
-    auto* btnZoomOut = new QPushButton(QStringLiteral("−"), this);
-    btnZoomOut->setFixedWidth(32);
+    auto* btnZoomOut = new QPushButton(QStringLiteral("🔍 −"), this);
+    btnZoomOut->setToolTip(QStringLiteral("Zoom out"));
     connect(btnZoomOut, &QPushButton::clicked, this, &ViewerWindow::zoomOut);
     toolLayout->addWidget(btnZoomOut);
 
-    auto* btnZoomIn = new QPushButton(QStringLiteral("+"), this);
-    btnZoomIn->setFixedWidth(32);
+    auto* btnZoomIn = new QPushButton(QStringLiteral("🔍 +"), this);
+    btnZoomIn->setToolTip(QStringLiteral("Zoom in"));
     connect(btnZoomIn, &QPushButton::clicked, this, &ViewerWindow::zoomIn);
     toolLayout->addWidget(btnZoomIn);
 
-    toolLayout->addSpacing(12);
+    toolLayout->addSpacing(8);
 
-    // Direct Drag-and-Drop Button
-    m_dragBtn = new DragButton(QStringLiteral("🖐 Drag to Attach"), this);
+    // Direct Drag-and-Drop Button (Indigo pill)
+    m_dragBtn = new DragButton(QStringLiteral("📤 Drag to Attach"), this);
     m_dragBtn->setStyleSheet(QStringLiteral(
         "QPushButton {"
         "    background-color: #4f46e5;"
         "    color: #ffffff;"
         "    font-weight: bold;"
-        "    padding: 6px 14px;"
-        "    border-radius: 4px;"
+        "    padding: 5px 12px;"
+        "    border-radius: 5px;"
         "    border: none;"
         "}"
         "QPushButton:hover {"
@@ -191,26 +195,25 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     ));
     toolLayout->addWidget(m_dragBtn);
 
-    toolLayout->addSpacing(12);
-
     m_btnFav = new QPushButton(QStringLiteral("⭐ Favorite"), this);
+    m_btnFav->setToolTip(QStringLiteral("Toggle favorite (F)"));
     connect(m_btnFav, &QPushButton::clicked, this, &ViewerWindow::toggleFavorite);
     toolLayout->addWidget(m_btnFav);
 
-    auto* btnCopyFile = new QPushButton(QStringLiteral("📋 File"), this);
-    btnCopyFile->setToolTip(QStringLiteral("Copy file for pasting into chat or file manager"));
-    connect(btnCopyFile, &QPushButton::clicked, this, &ViewerWindow::copyFile);
-    toolLayout->addWidget(btnCopyFile);
+    auto* btnCopyImg = new QPushButton(QStringLiteral("🖼️ Copy Image"), this);
+    btnCopyImg->setToolTip(QStringLiteral("Copy image bitmap to clipboard (Ctrl+C)"));
+    connect(btnCopyImg, &QPushButton::clicked, this, &ViewerWindow::copyImage);
+    toolLayout->addWidget(btnCopyImg);
 
-    auto* btnCopyPath = new QPushButton(QStringLiteral("🔗 Path"), this);
+    auto* btnCopyPath = new QPushButton(QStringLiteral("📋 Copy Path"), this);
     btnCopyPath->setToolTip(QStringLiteral("Copy file path to clipboard"));
     connect(btnCopyPath, &QPushButton::clicked, this, &ViewerWindow::copyPath);
     toolLayout->addWidget(btnCopyPath);
 
-    auto* btnCopyImg = new QPushButton(QStringLiteral("🖼️ Image"), this);
-    btnCopyImg->setToolTip(QStringLiteral("Copy raw image bitmap to clipboard"));
-    connect(btnCopyImg, &QPushButton::clicked, this, &ViewerWindow::copyImage);
-    toolLayout->addWidget(btnCopyImg);
+    auto* btnCopyFile = new QPushButton(QStringLiteral("📁 Copy File (Attach)"), this);
+    btnCopyFile->setToolTip(QStringLiteral("Copy file for pasting into chat or file manager"));
+    connect(btnCopyFile, &QPushButton::clicked, this, &ViewerWindow::copyFile);
+    toolLayout->addWidget(btnCopyFile);
 
     auto* btnOpenDef = new QPushButton(QStringLiteral("↗️ Open"), this);
     btnOpenDef->setToolTip(QStringLiteral("Open in default system viewer"));
@@ -230,6 +233,7 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     toolLayout->addStretch(1);
 
     m_infoLabel = new QLabel(this);
+    m_infoLabel->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 11px;"));
     toolLayout->addWidget(m_infoLabel);
 
     mainLayout->addWidget(toolBar);
@@ -261,21 +265,23 @@ void ViewerWindow::applyTheme() {
     if (m_darkMode) {
         setStyleSheet(QStringLiteral(
             "QMainWindow, QWidget {"
-            "    background-color: #0f121d;"
-            "    color: #e2e8f0;"
+            "    background-color: #161922;"
+            "    color: #dce1eb;"
             "}"
             "QPushButton {"
-            "    background-color: #1e2436;"
-            "    color: #e2e8f0;"
-            "    border: 1px solid #334155;"
-            "    border-radius: 4px;"
+            "    background-color: #1e2438;"
+            "    color: #dce1eb;"
+            "    border: 1px solid #2d3241;"
+            "    border-radius: 5px;"
             "    padding: 5px 10px;"
+            "    font-size: 11px;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #2e3852;"
+            "    background-color: #283046;"
+            "    border-color: #4f46e5;"
             "}"
             "QScrollArea {"
-            "    background-color: #0b0d14;"
+            "    background-color: #0b0f19;"
             "    border: none;"
             "}"
             "QLabel {"
@@ -292,11 +298,13 @@ void ViewerWindow::applyTheme() {
             "    background-color: #ffffff;"
             "    color: #0f172a;"
             "    border: 1px solid #cbd5e1;"
-            "    border-radius: 4px;"
+            "    border-radius: 5px;"
             "    padding: 5px 10px;"
+            "    font-size: 11px;"
             "}"
             "QPushButton:hover {"
             "    background-color: #f1f5f9;"
+            "    border-color: #4f46e5;"
             "}"
             "QScrollArea {"
             "    background-color: #e2e8f0;"
@@ -369,10 +377,13 @@ void ViewerWindow::updateDisplay() {
     m_imageLabel->resize(targetSize);
 
     const double mb = static_cast<double>(item.fileSize) / (1024.0 * 1024.0);
-    m_infoLabel->setText(QStringLiteral("[%1 / %2] %3 (%4×%5, %6 MB) — %7%")
+    setWindowTitle(QStringLiteral("%1 — OmniView Viewer (%2 / %3)")
+        .arg(item.filename)
+        .arg(m_currentIndex + 1)
+        .arg(m_items.size()));
+    m_infoLabel->setText(QStringLiteral("%1 / %2 — %3×%4 (%5 MB, %6%)")
         .arg(m_currentIndex + 1)
         .arg(m_items.size())
-        .arg(item.filename)
         .arg(origSize.width())
         .arg(origSize.height())
         .arg(mb, 0, 'f', 1)

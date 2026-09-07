@@ -48,6 +48,12 @@ void GalleryView::setDarkMode(bool dark) {
     if (auto* del = qobject_cast<GalleryDelegate*>(itemDelegate())) {
         del->setDarkMode(dark);
     }
+    QPalette p = palette();
+    const QColor bg = dark ? QColor(22, 25, 34) : QColor(248, 250, 252);
+    p.setColor(QPalette::Base, bg);
+    p.setColor(QPalette::Window, bg);
+    setPalette(p);
+    viewport()->setPalette(p);
     viewport()->update();
 }
 
@@ -173,6 +179,9 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
 }
 
 void GalleryView::mouseMoveEvent(QMouseEvent* event) {
+    const QModelIndex hoverIdx = indexAt(event->pos());
+    viewport()->setCursor(hoverIdx.isValid() ? Qt::PointingHandCursor : Qt::ArrowCursor);
+
     if (!(event->buttons() & Qt::LeftButton)) {
         m_dragStartPos = QPoint();
         if (state() != QAbstractItemView::NoState) {

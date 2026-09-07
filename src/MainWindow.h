@@ -32,8 +32,8 @@ private slots:
     void onChangeFolderClicked();
     void onRescanClicked();
     void onSearchTextChanged(const QString& text);
-    void onColorChanged(int index);
-    void onAspectChanged(int index);
+    void onColorPillClicked(const QString& colorId);
+    void onAspectPillClicked(const QString& aspectId);
     void onSortChanged(int index);
     void onCardSizeChanged(int value);
     void onSelectModeToggled();
@@ -61,6 +61,8 @@ private:
     QWidget* createSidebar();
     QWidget* createBatchToolbar();
     void applyTheme();
+    void updateColorPillStyles();
+    void updateAspectPillStyles();
 
     void startScan();
     void refreshGallery();
@@ -94,16 +96,19 @@ private:
     QFrame* m_similarityBanner = nullptr;
     QLabel* m_lblSimilarity = nullptr;
     QPushButton* m_btnClearSimilarity = nullptr;
-    QPushButton* m_btnChangeFolder = nullptr;
+
+    QLineEdit* m_folderPathEdit = nullptr;
+    QPushButton* m_btnBrowse = nullptr;
     QPushButton* m_btnRescan = nullptr;
     QLineEdit* m_searchEdit = nullptr;
-    QComboBox* m_colorCombo = nullptr;
-    QComboBox* m_aspectCombo = nullptr;
     QComboBox* m_sortCombo = nullptr;
     QSlider* m_cardSizeSlider = nullptr;
     QPushButton* m_btnSelectMode = nullptr;
     QPushButton* m_btnTheme = nullptr;
     QLabel* m_lblStats = nullptr;
+
+    QVector<QPushButton*> m_colorButtons;
+    QVector<QPushButton*> m_aspectButtons;
 
     QLineEdit* m_folderSearch = nullptr;
     QListWidget* m_folderList = nullptr;

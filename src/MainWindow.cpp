@@ -148,80 +148,151 @@ void MainWindow::setupUi() {
 
 QWidget* MainWindow::createTopBar() {
     auto* bar = new QWidget(this);
-    auto* layout = new QHBoxLayout(bar);
-    layout->setContentsMargins(12, 8, 12, 8);
-    layout->setSpacing(8);
+    auto* barLayout = new QVBoxLayout(bar);
+    barLayout->setContentsMargins(12, 6, 12, 6);
+    barLayout->setSpacing(6);
 
-    m_btnChangeFolder = new QPushButton(QStringLiteral("📁 %1").arg(QFileInfo(m_currentRootDir).fileName()), this);
-    m_btnChangeFolder->setToolTip(QStringLiteral("Change root directory"));
-    connect(m_btnChangeFolder, &QPushButton::clicked, this, &MainWindow::onChangeFolderClicked);
-    layout->addWidget(m_btnChangeFolder);
+    // Row 1: Folder, Browse, Search, Sort, Rescan, Batch Select, Theme
+    auto* row1 = new QHBoxLayout();
+    row1->setContentsMargins(0, 0, 0, 0);
+    row1->setSpacing(8);
 
-    m_btnRescan = new QPushButton(QStringLiteral("🔄 Rescan"), this);
-    m_btnRescan->setToolTip(QStringLiteral("Rescan files in current directory"));
-    connect(m_btnRescan, &QPushButton::clicked, this, &MainWindow::onRescanClicked);
-    layout->addWidget(m_btnRescan);
+    auto* lblFolder = new QLabel(QStringLiteral("Folder:"), this);
+    lblFolder->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    row1->addWidget(lblFolder);
+
+    m_folderPathEdit = new QLineEdit(this);
+    m_folderPathEdit->setText(m_currentRootDir);
+    m_folderPathEdit->setPlaceholderText(QStringLiteral("Enter directory path..."));
+    m_folderPathEdit->setMinimumWidth(220);
+    connect(m_folderPathEdit, &QLineEdit::returnPressed, this, [this]() {
+        const QString text = m_folderPathEdit->text().trimmed();
+        if (QDir(text).exists() && text != m_currentRootDir) {
+            m_currentRootDir = text;
+            m_selectedSubfolder = QStringLiteral("__all__");
+            startScan();
+        } else {
+            m_folderPathEdit->setText(m_currentRootDir);
+        }
+    });
+    row1->addWidget(m_folderPathEdit, 1);
+
+    m_btnBrowse = new QPushButton(QStringLiteral("📂 Browse"), this);
+    m_btnBrowse->setToolTip(QStringLiteral("Select directory"));
+    connect(m_btnBrowse, &QPushButton::clicked, this, &MainWindow::onChangeFolderClicked);
+    row1->addWidget(m_btnBrowse);
 
     m_searchEdit = new QLineEdit(this);
     m_searchEdit->setPlaceholderText(QStringLiteral("🔍 Search files and subfolders..."));
     m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setMinimumWidth(180);
     connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
-    layout->addWidget(m_searchEdit, 1);
-
-    // Color filter
-    m_colorCombo = new QComboBox(this);
-    for (const auto& item : ColorUtils::palette()) {
-        m_colorCombo->addItem(item.label, item.id);
-    }
-    connect(m_colorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onColorChanged);
-    layout->addWidget(m_colorCombo);
-
-    // Aspect filter
-    m_aspectCombo = new QComboBox(this);
-    m_aspectCombo->addItem(QStringLiteral("All Shapes"), QStringLiteral("all"));
-    m_aspectCombo->addItem(QStringLiteral("Landscape ⛶"), QStringLiteral("landscape"));
-    m_aspectCombo->addItem(QStringLiteral("Portrait ▯"), QStringLiteral("portrait"));
-    m_aspectCombo->addItem(QStringLiteral("Square ◻"), QStringLiteral("square"));
-    connect(m_aspectCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onAspectChanged);
-    layout->addWidget(m_aspectCombo);
+    row1->addWidget(m_searchEdit, 1);
 
     // Sort
+    auto* lblSort = new QLabel(QStringLiteral("Sort:"), this);
+    lblSort->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    row1->addWidget(lblSort);
+
     m_sortCombo = new QComboBox(this);
     m_sortCombo->addItem(QStringLiteral("📅 Newest First"), QStringLiteral("mtime_desc"));
     m_sortCombo->addItem(QStringLiteral("📅 Oldest First"), QStringLiteral("mtime_asc"));
     m_sortCombo->addItem(QStringLiteral("📦 Largest Size"), QStringLiteral("size_desc"));
     m_sortCombo->addItem(QStringLiteral("📦 Smallest Size"), QStringLiteral("size_asc"));
     m_sortCombo->addItem(QStringLiteral("🔤 Filename A-Z"), QStringLiteral("name_asc"));
-    m_sortCombo->addItem(QStringLiteral("🎲 Random"), QStringLiteral("random"));
+    m_sortCombo->addItem(QStringLiteral("🎲 Random Shuffle"), QStringLiteral("random"));
     connect(m_sortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onSortChanged);
-    layout->addWidget(m_sortCombo);
+    row1->addWidget(m_sortCombo);
 
-    // Card Size slider
-    auto* lblSize = new QLabel(QStringLiteral("Size:"), this);
-    layout->addWidget(lblSize);
-    m_cardSizeSlider = new QSlider(Qt::Horizontal, this);
-    m_cardSizeSlider->setRange(Config::MIN_GRID_SIZE, Config::MAX_GRID_SIZE);
-    m_cardSizeSlider->setValue(Config::DEFAULT_GRID_SIZE);
-    m_cardSizeSlider->setFixedWidth(100);
-    connect(m_cardSizeSlider, &QSlider::valueChanged, this, &MainWindow::onCardSizeChanged);
-    layout->addWidget(m_cardSizeSlider);
+    m_btnRescan = new QPushButton(QStringLiteral("🔄 Rescan"), this);
+    m_btnRescan->setToolTip(QStringLiteral("Rescan current directory"));
+    connect(m_btnRescan, &QPushButton::clicked, this, &MainWindow::onRescanClicked);
+    row1->addWidget(m_btnRescan);
 
-    // Select Mode button
     m_btnSelectMode = new QPushButton(QStringLiteral("☑️ Batch Select"), this);
     m_btnSelectMode->setCheckable(true);
     connect(m_btnSelectMode, &QPushButton::clicked, this, &MainWindow::onSelectModeToggled);
-    layout->addWidget(m_btnSelectMode);
+    row1->addWidget(m_btnSelectMode);
 
-    // Theme Toggle button
-    m_btnTheme = new QPushButton(QStringLiteral("🌙"), this);
-    m_btnTheme->setFixedWidth(36);
+    m_btnTheme = new QPushButton(QStringLiteral("🌙 Dark"), this);
     m_btnTheme->setToolTip(QStringLiteral("Toggle Dark / Light mode"));
     connect(m_btnTheme, &QPushButton::clicked, this, &MainWindow::onThemeToggled);
-    layout->addWidget(m_btnTheme);
+    row1->addWidget(m_btnTheme);
 
-    // Stats
+    barLayout->addLayout(row1);
+
+    // Row 2: Colors pills, Aspect pills, Size slider, Total stats
+    auto* row2 = new QHBoxLayout();
+    row2->setContentsMargins(0, 0, 0, 0);
+    row2->setSpacing(6);
+
+    auto* lblColors = new QLabel(QStringLiteral("Colors:"), this);
+    lblColors->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    row2->addWidget(lblColors);
+
+    m_colorButtons.clear();
+    for (const auto& item : ColorUtils::palette()) {
+        auto* btn = new QPushButton(item.label, this);
+        btn->setProperty("colorId", item.id);
+        btn->setProperty("hexColor", item.hexColor);
+        btn->setProperty("label", item.label);
+        btn->setCursor(Qt::PointingHandCursor);
+        const QString cid = item.id;
+        connect(btn, &QPushButton::clicked, this, [this, cid]() {
+            onColorPillClicked(cid);
+        });
+        row2->addWidget(btn);
+        m_colorButtons.append(btn);
+    }
+
+    row2->addSpacing(10);
+
+    auto* lblAspect = new QLabel(QStringLiteral("Aspect:"), this);
+    lblAspect->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    row2->addWidget(lblAspect);
+
+    m_aspectButtons.clear();
+    const QVector<QPair<QString, QString>> aspects = {
+        {QStringLiteral("all"), QStringLiteral("All")},
+        {QStringLiteral("portrait"), QStringLiteral("📱 Portrait")},
+        {QStringLiteral("landscape"), QStringLiteral("🖥️ Landscape")},
+        {QStringLiteral("square"), QStringLiteral("🔲 Square")}
+    };
+    for (const auto& pair : aspects) {
+        auto* btn = new QPushButton(pair.second, this);
+        btn->setProperty("aspectId", pair.first);
+        btn->setCursor(Qt::PointingHandCursor);
+        const QString aid = pair.first;
+        connect(btn, &QPushButton::clicked, this, [this, aid]() {
+            onAspectPillClicked(aid);
+        });
+        row2->addWidget(btn);
+        m_aspectButtons.append(btn);
+    }
+
+    row2->addSpacing(10);
+
+    auto* lblSize = new QLabel(QStringLiteral("Size:"), this);
+    lblSize->setStyleSheet(QStringLiteral("font-weight: bold;"));
+    row2->addWidget(lblSize);
+
+    m_cardSizeSlider = new QSlider(Qt::Horizontal, this);
+    m_cardSizeSlider->setRange(Config::MIN_GRID_SIZE, Config::MAX_GRID_SIZE);
+    m_cardSizeSlider->setValue(Config::DEFAULT_GRID_SIZE);
+    m_cardSizeSlider->setFixedWidth(90);
+    connect(m_cardSizeSlider, &QSlider::valueChanged, this, &MainWindow::onCardSizeChanged);
+    row2->addWidget(m_cardSizeSlider);
+
+    row2->addStretch(1);
+
     m_lblStats = new QLabel(QStringLiteral("Scanning..."), this);
-    layout->addWidget(m_lblStats);
+    m_lblStats->setStyleSheet(QStringLiteral("font-size: 11px;"));
+    row2->addWidget(m_lblStats);
+
+    barLayout->addLayout(row2);
+
+    updateColorPillStyles();
+    updateAspectPillStyles();
 
     return bar;
 }
@@ -257,16 +328,19 @@ QWidget* MainWindow::createSidebar() {
 
 QWidget* MainWindow::createBatchToolbar() {
     auto* frame = new QFrame(this);
+    frame->setObjectName(QStringLiteral("batchToolbar"));
     frame->setFrameShape(QFrame::StyledPanel);
 
     auto* layout = new QHBoxLayout(frame);
-    layout->setContentsMargins(12, 6, 12, 6);
-    layout->setSpacing(10);
+    layout->setContentsMargins(14, 8, 14, 8);
+    layout->setSpacing(12);
 
-    m_lblBatchCount = new QLabel(QStringLiteral("📦 0 items selected"), frame);
+    m_lblBatchCount = new QLabel(QStringLiteral("📦 0 item(s) selected"), frame);
     QFont f = m_lblBatchCount->font();
     f.setBold(true);
+    f.setPointSize(10);
     m_lblBatchCount->setFont(f);
+    m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8;"));
     layout->addWidget(m_lblBatchCount);
 
     // Direct Batch Drag Button!
@@ -277,7 +351,7 @@ QWidget* MainWindow::createBatchToolbar() {
         "    color: #ffffff;"
         "    font-weight: bold;"
         "    padding: 6px 14px;"
-        "    border-radius: 4px;"
+        "    border-radius: 5px;"
         "    border: none;"
         "}"
         "QPushButton:hover {"
@@ -318,57 +392,151 @@ QWidget* MainWindow::createBatchToolbar() {
     return frame;
 }
 
+void MainWindow::updateColorPillStyles() {
+    for (auto* btn : m_colorButtons) {
+        const QString colorId = btn->property("colorId").toString();
+        const QString hex = btn->property("hexColor").toString();
+        const QString lbl = btn->property("label").toString();
+        const bool isSel = (m_selectedColor == colorId) || (colorId == QStringLiteral("all") && (m_selectedColor == QStringLiteral("all") || m_selectedColor.isEmpty()));
+
+        btn->setText(isSel ? QStringLiteral("• %1 •").arg(lbl) : lbl);
+
+        const QString textCol = (colorId == QStringLiteral("white")) ? QStringLiteral("#0f172a") : QStringLiteral("#ffffff");
+        const QString border = isSel
+            ? QStringLiteral("border: 2px solid #ffffff; font-weight: bold;")
+            : QStringLiteral("border: 1px solid rgba(255, 255, 255, 0.25); font-weight: normal;");
+
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "    background-color: %1;"
+            "    color: %2;"
+            "    %3"
+            "    border-radius: 4px;"
+            "    padding: 2px 7px;"
+            "    font-size: 11px;"
+            "}"
+            "QPushButton:hover {"
+            "    border: 2px solid #00d2ff;"
+            "}"
+        ).arg(hex, textCol, border));
+    }
+}
+
+void MainWindow::updateAspectPillStyles() {
+    for (auto* btn : m_aspectButtons) {
+        const QString aspectId = btn->property("aspectId").toString();
+        const bool isSel = (m_selectedAspect == aspectId) || (aspectId == QStringLiteral("all") && (m_selectedAspect == QStringLiteral("all") || m_selectedAspect.isEmpty()));
+
+        if (isSel) {
+            btn->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "    background-color: #4f46e5;"
+                "    color: #ffffff;"
+                "    border: 1px solid #6366f1;"
+                "    border-radius: 4px;"
+                "    padding: 3px 9px;"
+                "    font-size: 11px;"
+                "    font-weight: bold;"
+                "}"
+            ));
+        } else {
+            const QString bg = m_darkMode ? QStringLiteral("#1e2438") : QStringLiteral("#f1f5f9");
+            const QString text = m_darkMode ? QStringLiteral("#dce1eb") : QStringLiteral("#334155");
+            const QString bColor = m_darkMode ? QStringLiteral("#2d3241") : QStringLiteral("#cbd5e1");
+            const QString hoverBg = m_darkMode ? QStringLiteral("#283046") : QStringLiteral("#e2e8f0");
+            btn->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "    background-color: %1;"
+                "    color: %2;"
+                "    border: 1px solid %3;"
+                "    border-radius: 4px;"
+                "    padding: 3px 9px;"
+                "    font-size: 11px;"
+                "    font-weight: normal;"
+                "}"
+                "QPushButton:hover {"
+                "    background-color: %4;"
+                "    border-color: #4f46e5;"
+                "}"
+            ).arg(bg, text, bColor, hoverBg));
+        }
+    }
+}
+
 void MainWindow::applyTheme() {
     if (m_darkMode) {
         setStyleSheet(QStringLiteral(
             "QMainWindow {"
-            "    background-color: #121520;"
-            "    color: #e2e8f0;"
+            "    background-color: #161922;"
+            "    color: #dce1eb;"
             "}"
             "QSplitter::handle {"
-            "    background-color: #262a38;"
+            "    background-color: #2d3241;"
             "}"
-            "QLineEdit, QComboBox, QListWidget {"
-            "    background-color: #1a1e2d;"
-            "    border: 1px solid #2d3748;"
+            "QLineEdit, QComboBox {"
+            "    background-color: #1e2438;"
+            "    border: 1px solid #2d3241;"
             "    border-radius: 5px;"
-            "    color: #e2e8f0;"
+            "    color: #dce1eb;"
             "    padding: 5px 8px;"
             "}"
+            "QLineEdit:focus, QComboBox:focus {"
+            "    border-color: #4f46e5;"
+            "}"
             "QComboBox QAbstractItemView {"
-            "    background-color: #1a1e2d;"
-            "    color: #e2e8f0;"
+            "    background-color: #1e2438;"
+            "    color: #dce1eb;"
             "    selection-background-color: #4f46e5;"
             "    selection-color: #ffffff;"
-            "    border: 1px solid #3b4259;"
-            "}"
-            "QLineEdit:focus, QComboBox:focus {"
-            "    border-color: #6366f1;"
+            "    border: 1px solid #2d3241;"
+            "    border-radius: 5px;"
             "}"
             "QPushButton {"
-            "    background-color: #24293c;"
-            "    border: 1px solid #3b4259;"
+            "    background-color: #1e2438;"
+            "    border: 1px solid #2d3241;"
             "    border-radius: 5px;"
-            "    color: #e2e8f0;"
+            "    color: #dce1eb;"
             "    padding: 5px 12px;"
             "}"
             "QPushButton:hover {"
-            "    background-color: #2f364e;"
+            "    background-color: #283046;"
+            "    border-color: #4f46e5;"
             "}"
             "QPushButton:checked {"
             "    background-color: #4f46e5;"
             "    color: #ffffff;"
             "    border-color: #6366f1;"
             "}"
+            "QListWidget {"
+            "    background-color: #161922;"
+            "    border: 1px solid #2d3241;"
+            "    border-radius: 6px;"
+            "    color: #dce1eb;"
+            "    outline: none;"
+            "    padding: 4px;"
+            "}"
+            "QListWidget::item {"
+            "    padding: 6px 10px;"
+            "    border-radius: 5px;"
+            "    margin: 1px 2px;"
+            "}"
+            "QListWidget::item:hover {"
+            "    background-color: #222838;"
+            "}"
             "QListWidget::item:selected {"
-            "    background-color: #4f46e5;"
-            "    color: #ffffff;"
-            "    border-radius: 4px;"
+            "    background-color: #1e293b;"
+            "    color: #38bdf8;"
+            "    font-weight: bold;"
             "}"
             "QFrame {"
-            "    background-color: #1e2436;"
-            "    border: 1px solid #3b4259;"
+            "    background-color: #161922;"
+            "    border: 1px solid #2d3241;"
             "    border-radius: 6px;"
+            "}"
+            "QFrame#batchToolbar {"
+            "    background-color: #0f172a;"
+            "    border: 1px solid #1e3a8a;"
+            "    border-radius: 8px;"
             "}"
             "QFrame#similarityBanner {"
             "    background-color: #1e1b4b;"
@@ -377,17 +545,17 @@ void MainWindow::applyTheme() {
             "}"
             "QLabel {"
             "    background-color: transparent;"
-            "    color: #e2e8f0;"
+            "    color: #dce1eb;"
             "}"
             "QScrollBar:vertical {"
-            "    background: #121520;"
-            "    width: 10px;"
+            "    background: #161922;"
+            "    width: 8px;"
             "    margin: 0px;"
             "}"
             "QScrollBar::handle:vertical {"
-            "    background: #2d3748;"
+            "    background: #334155;"
             "    min-height: 20px;"
-            "    border-radius: 5px;"
+            "    border-radius: 4px;"
             "}"
             "QScrollBar::handle:vertical:hover {"
             "    background: #4f46e5;"
@@ -396,14 +564,14 @@ void MainWindow::applyTheme() {
             "    height: 0px;"
             "}"
             "QScrollBar:horizontal {"
-            "    background: #121520;"
-            "    height: 10px;"
+            "    background: #161922;"
+            "    height: 8px;"
             "    margin: 0px;"
             "}"
             "QScrollBar::handle:horizontal {"
-            "    background: #2d3748;"
+            "    background: #334155;"
             "    min-width: 20px;"
-            "    border-radius: 5px;"
+            "    border-radius: 4px;"
             "}"
             "QScrollBar::handle:horizontal:hover {"
             "    background: #4f46e5;"
@@ -412,7 +580,7 @@ void MainWindow::applyTheme() {
             "    width: 0px;"
             "}"
         ));
-        m_btnTheme->setText(QStringLiteral("🌙"));
+        m_btnTheme->setText(QStringLiteral("🌙 Dark"));
     } else {
         setStyleSheet(QStringLiteral(
             "QMainWindow {"
@@ -422,12 +590,15 @@ void MainWindow::applyTheme() {
             "QSplitter::handle {"
             "    background-color: #cbd5e1;"
             "}"
-            "QLineEdit, QComboBox, QListWidget {"
+            "QLineEdit, QComboBox {"
             "    background-color: #ffffff;"
             "    border: 1px solid #cbd5e1;"
             "    border-radius: 5px;"
             "    color: #0f172a;"
             "    padding: 5px 8px;"
+            "}"
+            "QLineEdit:focus, QComboBox:focus {"
+            "    border-color: #4f46e5;"
             "}"
             "QComboBox QAbstractItemView {"
             "    background-color: #ffffff;"
@@ -435,9 +606,7 @@ void MainWindow::applyTheme() {
             "    selection-background-color: #4f46e5;"
             "    selection-color: #ffffff;"
             "    border: 1px solid #cbd5e1;"
-            "}"
-            "QLineEdit:focus, QComboBox:focus {"
-            "    border-color: #4f46e5;"
+            "    border-radius: 5px;"
             "}"
             "QPushButton {"
             "    background-color: #ffffff;"
@@ -448,21 +617,43 @@ void MainWindow::applyTheme() {
             "}"
             "QPushButton:hover {"
             "    background-color: #f1f5f9;"
+            "    border-color: #4f46e5;"
             "}"
             "QPushButton:checked {"
             "    background-color: #4f46e5;"
             "    color: #ffffff;"
             "    border-color: #4338ca;"
             "}"
+            "QListWidget {"
+            "    background-color: #ffffff;"
+            "    border: 1px solid #cbd5e1;"
+            "    border-radius: 6px;"
+            "    color: #0f172a;"
+            "    outline: none;"
+            "    padding: 4px;"
+            "}"
+            "QListWidget::item {"
+            "    padding: 6px 10px;"
+            "    border-radius: 5px;"
+            "    margin: 1px 2px;"
+            "}"
+            "QListWidget::item:hover {"
+            "    background-color: #f1f5f9;"
+            "}"
             "QListWidget::item:selected {"
-            "    background-color: #4f46e5;"
-            "    color: #ffffff;"
-            "    border-radius: 4px;"
+            "    background-color: #e0f2fe;"
+            "    color: #0284c7;"
+            "    font-weight: bold;"
             "}"
             "QFrame {"
             "    background-color: #ffffff;"
             "    border: 1px solid #cbd5e1;"
             "    border-radius: 6px;"
+            "}"
+            "QFrame#batchToolbar {"
+            "    background-color: #f0f5ff;"
+            "    border: 1px solid #b4c8f0;"
+            "    border-radius: 8px;"
             "}"
             "QFrame#similarityBanner {"
             "    background-color: #e0e7ff;"
@@ -475,13 +666,13 @@ void MainWindow::applyTheme() {
             "}"
             "QScrollBar:vertical {"
             "    background: #f8fafc;"
-            "    width: 10px;"
+            "    width: 8px;"
             "    margin: 0px;"
             "}"
             "QScrollBar::handle:vertical {"
             "    background: #cbd5e1;"
             "    min-height: 20px;"
-            "    border-radius: 5px;"
+            "    border-radius: 4px;"
             "}"
             "QScrollBar::handle:vertical:hover {"
             "    background: #4f46e5;"
@@ -491,13 +682,13 @@ void MainWindow::applyTheme() {
             "}"
             "QScrollBar:horizontal {"
             "    background: #f8fafc;"
-            "    height: 10px;"
+            "    height: 8px;"
             "    margin: 0px;"
             "}"
             "QScrollBar::handle:horizontal {"
             "    background: #cbd5e1;"
             "    min-width: 20px;"
-            "    border-radius: 5px;"
+            "    border-radius: 4px;"
             "}"
             "QScrollBar::handle:horizontal:hover {"
             "    background: #4f46e5;"
@@ -506,8 +697,11 @@ void MainWindow::applyTheme() {
             "    width: 0px;"
             "}"
         ));
-        m_btnTheme->setText(QStringLiteral("☀️"));
+        m_btnTheme->setText(QStringLiteral("☀️ Light"));
     }
+
+    updateColorPillStyles();
+    updateAspectPillStyles();
 
     if (m_delegate) m_delegate->setDarkMode(m_darkMode);
     if (m_view) m_view->setDarkMode(m_darkMode);
@@ -515,8 +709,10 @@ void MainWindow::applyTheme() {
 }
 
 void MainWindow::startScan() {
-    m_lblStats->setText(QStringLiteral("Scanning %1...").arg(m_currentRootDir));
-    m_btnChangeFolder->setText(QStringLiteral("📁 %1").arg(QFileInfo(m_currentRootDir).fileName()));
+    m_lblStats->setText(QStringLiteral("Scanning..."));
+    if (m_folderPathEdit) {
+        m_folderPathEdit->setText(m_currentRootDir);
+    }
 
     if (m_scanner && m_scanner->isRunning()) {
         m_scanner->cancel();
@@ -532,12 +728,12 @@ void MainWindow::startScan() {
 }
 
 void MainWindow::onScanProgress(int count) {
-    m_lblStats->setText(QStringLiteral("Found %1 images so far...").arg(count));
+    m_lblStats->setText(QStringLiteral("Found %1 images...").arg(count));
 }
 
 void MainWindow::onScanFinished(int totalCount, const Stats& stats) {
     const double gb = static_cast<double>(stats.totalBytes) / (1024.0 * 1024.0 * 1024.0);
-    m_lblStats->setText(QStringLiteral("%1 images (%2 GB)")
+    m_lblStats->setText(QStringLiteral("Total: %1 images (%2 GB)")
         .arg(totalCount)
         .arg(gb, 0, 'f', 1)
     );
@@ -715,13 +911,19 @@ void MainWindow::onSearchTextChanged(const QString& text) {
     m_searchTimer->start();
 }
 
-void MainWindow::onColorChanged(int index) {
-    m_selectedColor = m_colorCombo->itemData(index).toString();
+void MainWindow::onColorPillClicked(const QString& colorId) {
+    if (m_selectedColor == colorId || colorId == QStringLiteral("all")) {
+        m_selectedColor = QStringLiteral("all");
+    } else {
+        m_selectedColor = colorId;
+    }
+    updateColorPillStyles();
     refreshGallery();
 }
 
-void MainWindow::onAspectChanged(int index) {
-    m_selectedAspect = m_aspectCombo->itemData(index).toString();
+void MainWindow::onAspectPillClicked(const QString& aspectId) {
+    m_selectedAspect = aspectId;
+    updateAspectPillStyles();
     refreshGallery();
 }
 
@@ -741,10 +943,21 @@ void MainWindow::onSelectModeToggled() {
     m_view->setSelectMode(m_selectMode);
     const int count = m_view->getSelectedPaths().size();
     if (m_selectMode) {
-        m_btnSelectMode->setText(count > 0 ? QStringLiteral("☑️ Selecting (%1)").arg(count) : QStringLiteral("☑️ Selecting..."));
+        m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (%1)").arg(count));
+        m_btnSelectMode->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "    background-color: #12263e;"
+            "    color: #00d2ff;"
+            "    border: 1.5px solid #00d2ff;"
+            "    font-weight: bold;"
+            "    border-radius: 5px;"
+            "    padding: 5px 12px;"
+            "}"
+        ));
         m_batchBar->show();
     } else {
         m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+        m_btnSelectMode->setStyleSheet(QString());
         if (count == 0) {
             m_batchBar->hide();
         }
@@ -770,26 +983,49 @@ void MainWindow::onFolderSearchChanged(const QString& /*text*/) {
 
 void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
     if (count > 0) {
-        m_lblBatchCount->setText(count == 1 ? QStringLiteral("📦 1 item selected") : QStringLiteral("📦 %1 items selected").arg(count));
+        m_lblBatchCount->setText(QStringLiteral("📦 %1 item(s) selected").arg(count));
+        m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 13px;"));
         m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach (%1)").arg(count));
         m_btnBatchDrag->setFilePaths(paths);
         if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (%1)").arg(count));
         if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths (%1)").arg(count));
         if (m_selectMode) {
             m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (%1)").arg(count));
+            m_btnSelectMode->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "    background-color: #12263e;"
+                "    color: #00d2ff;"
+                "    border: 1.5px solid #00d2ff;"
+                "    font-weight: bold;"
+                "    border-radius: 5px;"
+                "    padding: 5px 12px;"
+                "}"
+            ));
         }
         m_batchBar->show();
     } else {
-        m_lblBatchCount->setText(QStringLiteral("📦 0 items selected"));
+        m_lblBatchCount->setText(QStringLiteral("📦 0 item(s) selected"));
+        m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 13px;"));
         m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach"));
         m_btnBatchDrag->setFilePaths(QStringList());
         if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (Attach)"));
         if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths"));
         if (m_selectMode) {
             m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (0)"));
+            m_btnSelectMode->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "    background-color: #12263e;"
+                "    color: #00d2ff;"
+                "    border: 1.5px solid #00d2ff;"
+                "    font-weight: bold;"
+                "    border-radius: 5px;"
+                "    padding: 5px 12px;"
+                "}"
+            ));
             m_batchBar->show();
         } else {
             m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+            m_btnSelectMode->setStyleSheet(QString());
             m_batchBar->hide();
         }
     }
