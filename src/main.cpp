@@ -23,6 +23,37 @@ int main(int argc, char* argv[]) {
     qRegisterMetaType<OmniView::ImageRecord>("OmniView::ImageRecord");
     qRegisterMetaType<OmniView::ImageRecord>("ImageRecord");
 
+    // Configure system font fallbacks so emojis and symbols render properly without tofu (▯)
+    QFont appFont = app.font();
+    QStringList fontFamilies = appFont.families();
+    if (fontFamilies.isEmpty() && !appFont.family().isEmpty()) {
+        fontFamilies.append(appFont.family());
+    }
+    const QStringList emojiFallbackFamilies = {
+        QStringLiteral("Noto Sans"),
+        QStringLiteral("DejaVu Sans"),
+        QStringLiteral("Ubuntu"),
+        QStringLiteral("Noto Color Emoji"),
+        QStringLiteral("Symbola"),
+        QStringLiteral("Segoe UI Emoji"),
+        QStringLiteral("Apple Color Emoji"),
+        QStringLiteral("Noto Sans Symbols 2")
+    };
+    for (const QString& fam : emojiFallbackFamilies) {
+        if (!fontFamilies.contains(fam)) {
+            fontFamilies.append(fam);
+        }
+    }
+    appFont.setFamilies(fontFamilies);
+    app.setFont(appFont);
+
+    // Register font substitutions for universal glyph fallback across all Qt widgets
+    QFont::insertSubstitutions(appFont.family(), emojiFallbackFamilies);
+    QFont::insertSubstitutions(QStringLiteral("Noto Sans"), emojiFallbackFamilies);
+    QFont::insertSubstitutions(QStringLiteral("Ubuntu"), emojiFallbackFamilies);
+    QFont::insertSubstitutions(QStringLiteral("DejaVu Sans"), emojiFallbackFamilies);
+    QFont::insertSubstitutions(QStringLiteral("Sans Serif"), emojiFallbackFamilies);
+
     // App Icon
     QString iconPath;
     const QString appDir = QApplication::applicationDirPath();

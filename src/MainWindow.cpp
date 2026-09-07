@@ -49,6 +49,24 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
     // Thumbnail generation signals
     connect(&m_thumbMgr, &ThumbnailManager::thumbnailReady, this, &MainWindow::onThumbnailReady);
 
+    // Ensure emoji and symbol font fallback chain is configured on MainWindow
+    QFont f = font();
+    QStringList families = f.families();
+    const QStringList fallbacks = {
+        QStringLiteral("Noto Sans"),
+        QStringLiteral("DejaVu Sans"),
+        QStringLiteral("Ubuntu"),
+        QStringLiteral("Noto Color Emoji"),
+        QStringLiteral("Symbola"),
+        QStringLiteral("Segoe UI Emoji"),
+        QStringLiteral("Apple Color Emoji")
+    };
+    for (const QString& fb : fallbacks) {
+        if (!families.contains(fb)) families.append(fb);
+    }
+    f.setFamilies(families);
+    setFont(f);
+
     setupUi();
     applyTheme();
     refreshFolderList();
@@ -209,7 +227,7 @@ QWidget* MainWindow::createTopBar() {
     connect(m_btnRescan, &QPushButton::clicked, this, &MainWindow::onRescanClicked);
     row1->addWidget(m_btnRescan);
 
-    m_btnSelectMode = new QPushButton(QStringLiteral("☑️ Batch Select"), this);
+    m_btnSelectMode = new QPushButton(QStringLiteral("☑ Batch Select"), this);
     m_btnSelectMode->setCheckable(true);
     connect(m_btnSelectMode, &QPushButton::clicked, this, &MainWindow::onSelectModeToggled);
     row1->addWidget(m_btnSelectMode);
@@ -466,6 +484,9 @@ void MainWindow::updateAspectPillStyles() {
 void MainWindow::applyTheme() {
     if (m_darkMode) {
         setStyleSheet(QStringLiteral(
+            "QMainWindow, QWidget {"
+            "    font-family: \"Noto Sans\", \"Ubuntu\", \"DejaVu Sans\", \"Symbola\", \"Noto Color Emoji\", \"Segoe UI Emoji\", sans-serif;"
+            "}"
             "QMainWindow {"
             "    background-color: #161922;"
             "    color: #dce1eb;"
@@ -583,6 +604,9 @@ void MainWindow::applyTheme() {
         m_btnTheme->setText(QStringLiteral("🌙 Dark"));
     } else {
         setStyleSheet(QStringLiteral(
+            "QMainWindow, QWidget {"
+            "    font-family: \"Noto Sans\", \"Ubuntu\", \"DejaVu Sans\", \"Symbola\", \"Noto Color Emoji\", \"Segoe UI Emoji\", sans-serif;"
+            "}"
             "QMainWindow {"
             "    background-color: #f8fafc;"
             "    color: #0f172a;"
@@ -943,7 +967,7 @@ void MainWindow::onSelectModeToggled() {
     m_view->setSelectMode(m_selectMode);
     const int count = m_view->getSelectedPaths().size();
     if (m_selectMode) {
-        m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (%1)").arg(count));
+        m_btnSelectMode->setText(QStringLiteral("☑ Selecting (%1)").arg(count));
         m_btnSelectMode->setStyleSheet(QStringLiteral(
             "QPushButton {"
             "    background-color: #12263e;"
@@ -956,7 +980,7 @@ void MainWindow::onSelectModeToggled() {
         ));
         m_batchBar->show();
     } else {
-        m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+        m_btnSelectMode->setText(QStringLiteral("☑ Batch Select"));
         m_btnSelectMode->setStyleSheet(QString());
         if (count == 0) {
             m_batchBar->hide();
@@ -990,7 +1014,7 @@ void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
         if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (%1)").arg(count));
         if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths (%1)").arg(count));
         if (m_selectMode) {
-            m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (%1)").arg(count));
+            m_btnSelectMode->setText(QStringLiteral("☑ Selecting (%1)").arg(count));
             m_btnSelectMode->setStyleSheet(QStringLiteral(
                 "QPushButton {"
                 "    background-color: #12263e;"
@@ -1011,7 +1035,7 @@ void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
         if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (Attach)"));
         if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths"));
         if (m_selectMode) {
-            m_btnSelectMode->setText(QStringLiteral("☑️ Selecting (0)"));
+            m_btnSelectMode->setText(QStringLiteral("☑ Selecting (0)"));
             m_btnSelectMode->setStyleSheet(QStringLiteral(
                 "QPushButton {"
                 "    background-color: #12263e;"
@@ -1024,7 +1048,7 @@ void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
             ));
             m_batchBar->show();
         } else {
-            m_btnSelectMode->setText(QStringLiteral("☑️ Batch Select"));
+            m_btnSelectMode->setText(QStringLiteral("☑ Batch Select"));
             m_btnSelectMode->setStyleSheet(QString());
             m_batchBar->hide();
         }

@@ -39,6 +39,16 @@ private slots:
         QVERIFY(!Config::isSupportedExtension(QStringLiteral(".txt")));
     }
 
+    void testEmojiFontFallback() {
+        // Verify that Symbola or an emoji font on the system provides glyphs for SMP characters
+        QFont symFont(QStringLiteral("Symbola"));
+        QFontMetrics symFm(symFont);
+        QVERIFY(symFm.inFontUcs4(0x1F4C5)); // 📅 Calendar
+        QVERIFY(symFm.inFontUcs4(0x1F4E6)); // 📦 Package
+        QVERIFY(symFm.inFontUcs4(0x1F319)); // 🌙 Moon
+        QVERIFY(symFm.inFontUcs4(0x1F504)); // 🔄 Rescan
+    }
+
     void testColorUtilsAspectAndHsv() {
         QCOMPARE(ColorUtils::getAspectType(1920, 1080), QStringLiteral("landscape"));
         QCOMPARE(ColorUtils::getAspectType(1080, 1920), QStringLiteral("portrait"));

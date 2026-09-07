@@ -265,6 +265,7 @@ void ViewerWindow::applyTheme() {
     if (m_darkMode) {
         setStyleSheet(QStringLiteral(
             "QMainWindow, QWidget {"
+            "    font-family: \"Noto Sans\", \"Ubuntu\", \"DejaVu Sans\", \"Symbola\", \"Noto Color Emoji\", \"Segoe UI Emoji\", sans-serif;"
             "    background-color: #161922;"
             "    color: #dce1eb;"
             "}"
@@ -291,6 +292,7 @@ void ViewerWindow::applyTheme() {
     } else {
         setStyleSheet(QStringLiteral(
             "QMainWindow, QWidget {"
+            "    font-family: \"Noto Sans\", \"Ubuntu\", \"DejaVu Sans\", \"Symbola\", \"Noto Color Emoji\", \"Segoe UI Emoji\", sans-serif;"
             "    background-color: #f8fafc;"
             "    color: #0f172a;"
             "}"
