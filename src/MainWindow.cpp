@@ -110,6 +110,27 @@ void MainWindow::setupUi() {
         refreshGallery();
     });
 
+    connect(m_view, &GalleryView::findSimilarRequested, this, &MainWindow::onFindSimilarRequested);
+
+    // Similarity Search Banner
+    m_similarityBanner = new QFrame(this);
+    m_similarityBanner->setObjectName(QStringLiteral("similarityBanner"));
+    auto* simLayout = new QHBoxLayout(m_similarityBanner);
+    simLayout->setContentsMargins(12, 6, 12, 6);
+    simLayout->setSpacing(8);
+
+    m_lblSimilarity = new QLabel(m_similarityBanner);
+    m_lblSimilarity->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 13px; color: #a5b4fc;"));
+    simLayout->addWidget(m_lblSimilarity, 1);
+
+    m_btnClearSimilarity = new QPushButton(QStringLiteral("✕ Clear Similarity Search"), m_similarityBanner);
+    m_btnClearSimilarity->setStyleSheet(QStringLiteral("background-color: #4338ca; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-weight: bold;"));
+    connect(m_btnClearSimilarity, &QPushButton::clicked, this, &MainWindow::onClearSimilarityClicked);
+    simLayout->addWidget(m_btnClearSimilarity);
+
+    m_similarityBanner->hide();
+    galleryLayout->addWidget(m_similarityBanner);
+
     galleryLayout->addWidget(m_view, 1);
 
     // Batch Action Toolbar (floating bottom panel)
@@ -300,7 +321,7 @@ QWidget* MainWindow::createBatchToolbar() {
 void MainWindow::applyTheme() {
     if (m_darkMode) {
         setStyleSheet(QStringLiteral(
-            "QMainWindow, QWidget {"
+            "QMainWindow {"
             "    background-color: #121520;"
             "    color: #e2e8f0;"
             "}"
@@ -313,6 +334,13 @@ void MainWindow::applyTheme() {
             "    border-radius: 5px;"
             "    color: #e2e8f0;"
             "    padding: 5px 8px;"
+            "}"
+            "QComboBox QAbstractItemView {"
+            "    background-color: #1a1e2d;"
+            "    color: #e2e8f0;"
+            "    selection-background-color: #4f46e5;"
+            "    selection-color: #ffffff;"
+            "    border: 1px solid #3b4259;"
             "}"
             "QLineEdit:focus, QComboBox:focus {"
             "    border-color: #6366f1;"
@@ -342,11 +370,52 @@ void MainWindow::applyTheme() {
             "    border: 1px solid #3b4259;"
             "    border-radius: 6px;"
             "}"
+            "QFrame#similarityBanner {"
+            "    background-color: #1e1b4b;"
+            "    border: 1px solid #4f46e5;"
+            "    border-radius: 6px;"
+            "}"
+            "QLabel {"
+            "    background-color: transparent;"
+            "    color: #e2e8f0;"
+            "}"
+            "QScrollBar:vertical {"
+            "    background: #121520;"
+            "    width: 10px;"
+            "    margin: 0px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "    background: #2d3748;"
+            "    min-height: 20px;"
+            "    border-radius: 5px;"
+            "}"
+            "QScrollBar::handle:vertical:hover {"
+            "    background: #4f46e5;"
+            "}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "    height: 0px;"
+            "}"
+            "QScrollBar:horizontal {"
+            "    background: #121520;"
+            "    height: 10px;"
+            "    margin: 0px;"
+            "}"
+            "QScrollBar::handle:horizontal {"
+            "    background: #2d3748;"
+            "    min-width: 20px;"
+            "    border-radius: 5px;"
+            "}"
+            "QScrollBar::handle:horizontal:hover {"
+            "    background: #4f46e5;"
+            "}"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
+            "    width: 0px;"
+            "}"
         ));
         m_btnTheme->setText(QStringLiteral("🌙"));
     } else {
         setStyleSheet(QStringLiteral(
-            "QMainWindow, QWidget {"
+            "QMainWindow {"
             "    background-color: #f8fafc;"
             "    color: #0f172a;"
             "}"
@@ -359,6 +428,13 @@ void MainWindow::applyTheme() {
             "    border-radius: 5px;"
             "    color: #0f172a;"
             "    padding: 5px 8px;"
+            "}"
+            "QComboBox QAbstractItemView {"
+            "    background-color: #ffffff;"
+            "    color: #0f172a;"
+            "    selection-background-color: #4f46e5;"
+            "    selection-color: #ffffff;"
+            "    border: 1px solid #cbd5e1;"
             "}"
             "QLineEdit:focus, QComboBox:focus {"
             "    border-color: #4f46e5;"
@@ -387,6 +463,47 @@ void MainWindow::applyTheme() {
             "    background-color: #ffffff;"
             "    border: 1px solid #cbd5e1;"
             "    border-radius: 6px;"
+            "}"
+            "QFrame#similarityBanner {"
+            "    background-color: #e0e7ff;"
+            "    border: 1px solid #6366f1;"
+            "    border-radius: 6px;"
+            "}"
+            "QLabel {"
+            "    background-color: transparent;"
+            "    color: #0f172a;"
+            "}"
+            "QScrollBar:vertical {"
+            "    background: #f8fafc;"
+            "    width: 10px;"
+            "    margin: 0px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "    background: #cbd5e1;"
+            "    min-height: 20px;"
+            "    border-radius: 5px;"
+            "}"
+            "QScrollBar::handle:vertical:hover {"
+            "    background: #4f46e5;"
+            "}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "    height: 0px;"
+            "}"
+            "QScrollBar:horizontal {"
+            "    background: #f8fafc;"
+            "    height: 10px;"
+            "    margin: 0px;"
+            "}"
+            "QScrollBar::handle:horizontal {"
+            "    background: #cbd5e1;"
+            "    min-width: 20px;"
+            "    border-radius: 5px;"
+            "}"
+            "QScrollBar::handle:horizontal:hover {"
+            "    background: #4f46e5;"
+            "}"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
+            "    width: 0px;"
             "}"
         ));
         m_btnTheme->setText(QStringLiteral("☀️"));
@@ -519,9 +636,58 @@ void MainWindow::refreshGallery() {
     filter.sortBy = m_sortBy;
 
     m_currentItems = m_db.queryImages(filter);
-    m_model->setItems(m_currentItems);
 
+    if (!m_similarityTargetDHash.isEmpty()) {
+        QVector<QPair<int, ImageRecord>> scored;
+        for (const auto& rec : m_currentItems) {
+            if (rec.dhash.isEmpty() || rec.dhash == QStringLiteral("0000000000000000")) {
+                continue;
+            }
+            int dist = ColorUtils::hammingDistance(m_similarityTargetDHash, rec.dhash);
+            if (dist <= 18) {
+                scored.append(qMakePair(dist, rec));
+            }
+        }
+        std::sort(scored.begin(), scored.end(), [](const QPair<int, ImageRecord>& a, const QPair<int, ImageRecord>& b) {
+            return a.first < b.first;
+        });
+
+        m_currentItems.clear();
+        for (const auto& pair : scored) {
+            m_currentItems.append(pair.second);
+        }
+
+        if (m_lblSimilarity) {
+            m_lblSimilarity->setText(QStringLiteral("✨ Showing %1 visually similar images to '%2'")
+                .arg(m_currentItems.size())
+                .arg(m_similarityTargetFilename));
+        }
+        if (m_similarityBanner) {
+            m_similarityBanner->setVisible(true);
+        }
+    } else {
+        if (m_similarityBanner) {
+            m_similarityBanner->setVisible(false);
+        }
+    }
+
+    m_model->setItems(m_currentItems);
     m_view->viewport()->update();
+}
+
+void MainWindow::onFindSimilarRequested(const QString& dhash, const QString& filename) {
+    m_similarityTargetDHash = dhash;
+    m_similarityTargetFilename = filename;
+    refreshGallery();
+}
+
+void MainWindow::onClearSimilarityClicked() {
+    m_similarityTargetDHash.clear();
+    m_similarityTargetFilename.clear();
+    if (m_similarityBanner) {
+        m_similarityBanner->setVisible(false);
+    }
+    refreshGallery();
 }
 
 void MainWindow::onThumbnailReady(const QString& sourcePath, const QString& /*thumbPath*/, const ImageFeatures& feat) {

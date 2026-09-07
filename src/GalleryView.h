@@ -35,6 +35,7 @@ signals:
     void selectionCountChanged(int count, const QStringList& paths);
     void favoriteToggled(int row, const QString& path);
     void filterToSubfolderRequested(const QString& subfolder);
+    void findSimilarRequested(const QString& dhash, const QString& filename);
 
 public slots:
     void copySelectedFiles();

@@ -263,8 +263,13 @@ void GalleryView::startDragFiles(const QStringList& paths) {
     const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
     mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
 
-    // Pre-populate clipboard so user can also instant-paste
-    QApplication::clipboard()->setMimeData(mimeData);
+    // Pre-populate clipboard with a dedicated QMimeData instance so user can also instant-paste
+    // without causing a double-free with QDrag!
+    auto* clipMime = new QMimeData();
+    clipMime->setUrls(urls);
+    clipMime->setText(validPaths.join(QStringLiteral("\n")));
+    clipMime->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
+    QApplication::clipboard()->setMimeData(clipMime);
 
     // 4. Create drag thumbnail badge
     QPixmap thumbPix;
@@ -541,6 +546,13 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
             connect(actCopyImg, &QAction::triggered, this, [this, path]() {
                 copyImageBitmap(path);
             });
+
+            if (!item->dhash.isEmpty() && item->dhash != QStringLiteral("0000000000000000")) {
+                auto* actSim = menu.addAction(QStringLiteral("✨ Find Visually Similar Images"));
+                connect(actSim, &QAction::triggered, this, [this, item]() {
+                    emit findSimilarRequested(item->dhash, item->filename);
+                });
+            }
 
             menu.addSeparator();
 

@@ -71,6 +71,7 @@ void ThumbnailManager::notifyThumbnailReady(const QString& sourcePath, const QSt
 }
 
 void ThumbnailManager::onThumbnailGenerated(const QString& sourcePath, const QString& thumbPath, const ImageFeatures& /*feat*/) {
+    QMutexLocker lock(&m_mutex);
     if (!m_memCache.contains(sourcePath) && QFile::exists(thumbPath)) {
         QPixmap p(thumbPath);
         if (!p.isNull()) {

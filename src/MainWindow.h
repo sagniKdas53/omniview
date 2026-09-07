@@ -52,6 +52,8 @@ private slots:
     void onSelectionCountChanged(int count, const QStringList& paths);
     void onOpenViewer(const ImageRecord& item, int row);
     void onFavoriteToggled(int row, const QString& path);
+    void onFindSimilarRequested(const QString& dhash, const QString& filename);
+    void onClearSimilarityClicked();
 
 private:
     void setupUi();
@@ -84,9 +86,14 @@ private:
     QString m_sortBy = QStringLiteral("mtime_desc");
     bool m_darkMode = true;
     bool m_selectMode = false;
+    QString m_similarityTargetDHash;
+    QString m_similarityTargetFilename;
     QVector<ImageRecord> m_currentItems;
 
     // UI elements
+    QFrame* m_similarityBanner = nullptr;
+    QLabel* m_lblSimilarity = nullptr;
+    QPushButton* m_btnClearSimilarity = nullptr;
     QPushButton* m_btnChangeFolder = nullptr;
     QPushButton* m_btnRescan = nullptr;
     QLineEdit* m_searchEdit = nullptr;
