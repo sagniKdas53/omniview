@@ -21,6 +21,7 @@
 #include <QDesktopServices>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTimer>
 #include <QtMath>
 
 namespace OmniView {
@@ -341,10 +342,10 @@ void ViewerWindow::showImage(const QVector<ImageRecord>& items, int index) {
         }
     }
 
-    updateDisplay();
     show();
     raise();
     activateWindow();
+    updateDisplay();
 }
 
 void ViewerWindow::updateDisplay() {
@@ -362,12 +363,35 @@ void ViewerWindow::updateDisplay() {
     QSize targetSize;
 
     if (m_fitMode) {
-        const QSize availSize = m_scrollArea->viewport()->size() - QSize(20, 20);
+        QSize availSize = m_scrollArea->viewport()->size() - QSize(24, 24);
+        if (availSize.width() < 100 || availSize.height() < 100) {
+            availSize = m_scrollArea->size() - QSize(24, 24);
+        }
+        if (availSize.width() < 100 || availSize.height() < 100) {
+            availSize = this->size() - QSize(40, 100);
+        }
+        if (availSize.width() < 200) availSize.setWidth(1000);
+        if (availSize.height() < 200) availSize.setHeight(700);
+
         targetSize = origSize.scaled(availSize, Qt::KeepAspectRatio);
+        // For tiny images (like small icons), limit upscaling in fit mode to at most 3x
+        if (targetSize.width() > origSize.width() * 3) {
+            targetSize = origSize * 3;
+            if (targetSize.width() > availSize.width() || targetSize.height() > availSize.height()) {
+                targetSize = origSize.scaled(availSize, Qt::KeepAspectRatio);
+            }
+        }
         m_zoomFactor = static_cast<double>(targetSize.width()) / origSize.width();
     } else {
         targetSize = origSize * m_zoomFactor;
     }
+
+    if (m_zoomFactor < 0.01) {
+        m_zoomFactor = 0.01;
+    }
+
+    if (targetSize.width() < 1) targetSize.setWidth(1);
+    if (targetSize.height() < 1) targetSize.setHeight(1);
 
     constexpr int MAX_VIEW_DIMENSION = 8192;
     if (targetSize.width() > MAX_VIEW_DIMENSION || targetSize.height() > MAX_VIEW_DIMENSION) {
@@ -379,7 +403,7 @@ void ViewerWindow::updateDisplay() {
         m_currentImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation)
     );
     m_imageLabel->setPixmap(pix);
-    m_imageLabel->resize(targetSize);
+    m_imageLabel->setFixedSize(targetSize);
 
     const double mb = static_cast<double>(item.fileSize) / (1024.0 * 1024.0);
     setWindowTitle(QStringLiteral("%1 — OmniView Viewer (%2 / %3)")
@@ -546,6 +570,17 @@ void ViewerWindow::wheelEvent(QWheelEvent* event) {
         zoomOut();
     }
     event->accept();
+}
+
+void ViewerWindow::showEvent(QShowEvent* event) {
+    QMainWindow::showEvent(event);
+    if (m_fitMode) {
+        QTimer::singleShot(0, this, [this]() {
+            if (m_fitMode) {
+                updateDisplay();
+            }
+        });
+    }
 }
 
 void ViewerWindow::resizeEvent(QResizeEvent* event) {

@@ -448,6 +448,40 @@ private slots:
         QPixmap p = mgr.getCachedPixmap(QStringLiteral("/nonexistent/image.png"));
         QVERIFY(p.isNull());
     }
+
+    void testViewerWindowSensibleSizing() {
+        QTemporaryDir tmpDir;
+        QVERIFY(tmpDir.isValid());
+        const QString imgPath = tmpDir.filePath(QStringLiteral("highres.png"));
+        QImage bigImg(3541, 2508, QImage::Format_RGB32);
+        bigImg.fill(Qt::blue);
+        QVERIFY(bigImg.save(imgPath));
+
+        ViewerWindow viewer;
+        QVector<ImageRecord> items = {
+            {imgPath, QStringLiteral("highres.png"), QStringLiteral(""), 1024 * 1024, 1000.0, 3541, 2508, QStringLiteral("landscape"), QString(), 0, 0, 0, QString(), QString(), false, false}
+        };
+
+        viewer.showImage(items, 0);
+        QCoreApplication::processEvents();
+
+        QVERIFY(viewer.windowTitle().contains(QStringLiteral("highres.png")));
+        QVERIFY(viewer.width() >= 800);
+        QVERIFY(viewer.height() >= 600);
+
+        // Find QLabel with image or info
+        const auto labels = viewer.findChildren<QLabel*>();
+        bool foundValidInfo = false;
+        for (auto* lbl : labels) {
+            if (lbl->text().contains(QStringLiteral("3541×2508"))) {
+                foundValidInfo = true;
+                // Ensure it does NOT report 0%
+                QVERIFY(!lbl->text().contains(QStringLiteral("0%")));
+                break;
+            }
+        }
+        QVERIFY(foundValidInfo);
+    }
 };
 
 QTEST_MAIN(TestOmniView)
