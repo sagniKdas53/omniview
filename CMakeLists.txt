@@ -8,7 +8,12 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
 
 # Common sources
 set(OMNIVIEW_LIB_SOURCES
@@ -49,11 +54,11 @@ add_executable(omniview-cpp
 
 target_include_directories(omniview-cpp PRIVATE src)
 target_link_libraries(omniview-cpp PRIVATE
-    Qt5::Core
-    Qt5::Gui
-    Qt5::Widgets
-    Qt5::Sql
-    Qt5::Concurrent
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
 )
 
 # Test target
@@ -65,12 +70,12 @@ add_executable(omniview_tests
 )
 target_include_directories(omniview_tests PRIVATE src)
 target_link_libraries(omniview_tests PRIVATE
-    Qt5::Core
-    Qt5::Gui
-    Qt5::Widgets
-    Qt5::Sql
-    Qt5::Concurrent
-    Qt5::Test
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::Sql
+    Qt${QT_VERSION_MAJOR}::Concurrent
+    Qt${QT_VERSION_MAJOR}::Test
 )
 
 add_test(NAME OmniViewTests COMMAND omniview_tests)

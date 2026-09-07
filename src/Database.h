@@ -68,6 +68,8 @@ public:
 
     QString dbPath() const { return m_dbPath; }
 
+    static QString escapeSqlLike(const QString& str);
+
 private:
     QSqlDatabase getDatabase();
 

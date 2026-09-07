@@ -21,14 +21,18 @@ QString Config::appTitle() {
 }
 
 QString Config::defaultRootDir() {
-    const QString custom = QStringLiteral("/home/sagnik/Downloads/pixiv_downloads");
-    if (QDir(custom).exists()) {
-        return custom;
+    const QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    if (!pictures.isEmpty() && QDir(pictures).exists()) {
+        return pictures;
     }
     return QDir::homePath();
 }
 
 QString Config::cacheDir() {
+    const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+    if (!cache.isEmpty()) {
+        return cache + QStringLiteral("/omniview");
+    }
     return QDir::homePath() + QStringLiteral("/.cache/omniview");
 }
 

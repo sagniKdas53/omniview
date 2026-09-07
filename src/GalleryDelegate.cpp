@@ -109,10 +109,11 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
     } else {
         painter->save();
         painter->setClipPath(imgClipPath);
-        const QPixmap scaled = pix.scaled(imgArea.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        const double px = imgArea.left() + (imgArea.width() - scaled.width()) / 2.0;
-        const double py = imgArea.top() + (imgArea.height() - scaled.height()) / 2.0;
-        painter->drawPixmap(QPointF(px, py), scaled);
+        const QSize targetSize = pix.size().scaled(imgArea.size().toSize(), Qt::KeepAspectRatio);
+        const double px = imgArea.left() + (imgArea.width() - targetSize.width()) / 2.0;
+        const double py = imgArea.top() + (imgArea.height() - targetSize.height()) / 2.0;
+        const QRectF targetRect(px, py, targetSize.width(), targetSize.height());
+        painter->drawPixmap(targetRect, pix, pix.rect());
         painter->restore();
     }
 

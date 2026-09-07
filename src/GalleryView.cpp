@@ -285,14 +285,6 @@ void GalleryView::startDragFiles(const QStringList& paths) {
     const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
     mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
 
-    // Pre-populate clipboard with a dedicated QMimeData instance so user can also instant-paste
-    // without causing a double-free with QDrag!
-    auto* clipMime = new QMimeData();
-    clipMime->setUrls(urls);
-    clipMime->setText(validPaths.join(QStringLiteral("\n")));
-    clipMime->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
-    QApplication::clipboard()->setMimeData(clipMime);
-
     // 4. Create drag thumbnail badge
     QPixmap thumbPix;
     if (m_thumbMgr) {
@@ -544,12 +536,13 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
     } else if (idx.isValid()) {
         const auto* item = gModel->getItem(idx.row());
         if (item) {
-            const QString path = item->path;
+            const ImageRecord itemRecord = *item;
+            const QString path = itemRecord.path;
             const bool isSelected = selectionModel() && selectionModel()->isSelected(idx);
 
             auto* actOpen = menu.addAction(QStringLiteral("🔍 Open in Viewer (Return)"));
-            connect(actOpen, &QAction::triggered, this, [this, item, idx]() {
-                emit openViewerRequested(*item, idx.row());
+            connect(actOpen, &QAction::triggered, this, [this, itemRecord, idx]() {
+                emit openViewerRequested(itemRecord, idx.row());
             });
 
             auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach"));
@@ -577,26 +570,26 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
                 copyImageBitmap(path);
             });
 
-            if (!item->dhash.isEmpty() && item->dhash != QStringLiteral("0000000000000000")) {
+            if (!itemRecord.dhash.isEmpty() && itemRecord.dhash != QStringLiteral("0000000000000000")) {
                 auto* actSim = menu.addAction(QStringLiteral("✨ Find Visually Similar Images"));
-                connect(actSim, &QAction::triggered, this, [this, item]() {
-                    emit findSimilarRequested(item->dhash, item->filename);
+                connect(actSim, &QAction::triggered, this, [this, itemRecord]() {
+                    emit findSimilarRequested(itemRecord.dhash, itemRecord.filename);
                 });
             }
 
             menu.addSeparator();
 
-            if (!item->subfolder.isEmpty()) {
-                const QString sub = item->subfolder;
+            if (!itemRecord.subfolder.isEmpty()) {
+                const QString sub = itemRecord.subfolder;
                 auto* actFolder = menu.addAction(QStringLiteral("📂 Show Only Folder: %1").arg(sub));
                 connect(actFolder, &QAction::triggered, this, [this, sub]() {
                     emit filterToSubfolderRequested(sub);
                 });
             }
 
-            auto* actFav = menu.addAction(item->isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
-            connect(actFav, &QAction::triggered, this, [this, idx, item]() {
-                emit favoriteToggled(idx.row(), item->path);
+            auto* actFav = menu.addAction(itemRecord.isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
+            connect(actFav, &QAction::triggered, this, [this, idx, itemRecord]() {
+                emit favoriteToggled(idx.row(), itemRecord.path);
             });
 
             menu.addSeparator();

@@ -6,9 +6,50 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCryptographicHash>
+#include <QDateTime>
+#include <QRandomGenerator>
+#include <limits>
 #include <cstring>
 
 namespace OmniView {
+
+QString ZipUtils::generateUuidV7() {
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const quint16 randA = static_cast<quint16>(QRandomGenerator::global()->generate() & 0x0FFF);
+    const quint16 verAndRandA = 0x7000 | randA; // version 7
+    const quint16 randB = static_cast<quint16>(QRandomGenerator::global()->generate());
+    const quint16 varAndRandB = 0x8000 | (randB & 0x3FFF); // variant 1 (RFC 4122 / 9562)
+    const quint32 randC = QRandomGenerator::global()->generate();
+    const quint16 randD = static_cast<quint16>(QRandomGenerator::global()->generate());
+
+    return QString::asprintf("%08x-%04x-%04x-%04x-%08x%04x",
+        static_cast<quint32>((nowMs >> 16) & 0xFFFFFFFF),
+        static_cast<quint16>(nowMs & 0xFFFF),
+        verAndRandA,
+        varAndRandB,
+        randC,
+        randD
+    );
+}
+
+bool ZipUtils::isSafeInnerPath(const QString& innerPath) {
+    if (innerPath.isEmpty()) return false;
+    QString normalized = innerPath;
+    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+
+    // Reject absolute paths and drive letters (e.g. /etc or C:/)
+    if (normalized.startsWith(QLatin1Char('/'))) return false;
+    if (normalized.length() >= 2 && normalized.at(1) == QLatin1Char(':')) return false;
+
+    // Check path segments for directory traversal
+    const QStringList segments = normalized.split(QLatin1Char('/'), Qt::KeepEmptyParts);
+    for (const QString& seg : segments) {
+        if (seg == QStringLiteral("..") || seg == QStringLiteral(".")) {
+            return false;
+        }
+    }
+    return true;
+}
 
 bool ZipUtils::isZipPath(const QString& path, QString* outZipPath, QString* outInnerPath) {
     const int hashIdx = path.indexOf(QLatin1Char('#'));
@@ -29,7 +70,10 @@ QString ZipUtils::makeZipPath(const QString& zipPath, const QString& innerPath) 
 }
 
 bool ZipUtils::isDuplicateOfRaw(const QString& zipDirPath, const QString& zipStem, const QString& innerPath) {
+    if (!isSafeInnerPath(innerPath)) return false;
+
     QString innerClean = innerPath;
+    innerClean.replace(QLatin1Char('\\'), QLatin1Char('/'));
     const QString stemSlash = zipStem + QStringLiteral("/");
     if (innerClean.startsWith(stemSlash, Qt::CaseInsensitive)) {
         innerClean = innerClean.mid(stemSlash.length());
@@ -66,7 +110,10 @@ QVector<ZipImageEntry> ZipUtils::listZipImages(const QString& zipPath) {
         }
 
         const QString filename = QString::fromUtf8(stat.m_filename);
-        if (filename.startsWith(QStringLiteral("__MACOSX/")) || filename.contains(QStringLiteral("/."))) {
+        if (!isSafeInnerPath(filename)) {
+            continue;
+        }
+        if (filename.startsWith(QStringLiteral("__MACOSX/"))) {
             continue;
         }
 
@@ -77,6 +124,10 @@ QVector<ZipImageEntry> ZipUtils::listZipImages(const QString& zipPath) {
 
         const QString suffix = QStringLiteral(".") + fi.suffix().toLower();
         if (!Config::isSupportedExtension(suffix)) {
+            continue;
+        }
+
+        if (stat.m_uncomp_size > static_cast<mz_uint64>(MAX_UNCOMPRESSED_ENTRY_SIZE)) {
             continue;
         }
 
@@ -92,6 +143,10 @@ QVector<ZipImageEntry> ZipUtils::listZipImages(const QString& zipPath) {
 }
 
 QByteArray ZipUtils::readZipEntryBytes(const QString& zipPath, const QString& innerPath) {
+    if (!isSafeInnerPath(innerPath)) {
+        return QByteArray();
+    }
+
     mz_zip_archive zip;
     std::memset(&zip, 0, sizeof(zip));
 
@@ -114,9 +169,26 @@ QByteArray ZipUtils::readZipEntryBytes(const QString& zipPath, const QString& in
         return QByteArray();
     }
 
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(&zip, static_cast<mz_uint>(fileIdx), &stat)) {
+        mz_zip_reader_end(&zip);
+        return QByteArray();
+    }
+
+    if (stat.m_uncomp_size > static_cast<mz_uint64>(MAX_UNCOMPRESSED_ENTRY_SIZE)) {
+        mz_zip_reader_end(&zip);
+        return QByteArray();
+    }
+
     size_t uncompSize = 0;
     void* data = mz_zip_reader_extract_to_heap(&zip, static_cast<mz_uint>(fileIdx), &uncompSize, 0);
     if (!data) {
+        mz_zip_reader_end(&zip);
+        return QByteArray();
+    }
+
+    if (uncompSize > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        mz_free(data);
         mz_zip_reader_end(&zip);
         return QByteArray();
     }
@@ -154,11 +226,26 @@ QString ZipUtils::ensureExtracted(const QString& zipCompositePath) {
         return QString();
     }
 
-    QFile out(targetFile);
+    // Atomic write via UUID-v7 temporary file to eliminate race conditions
+    const QString tmpFile = targetFile + QStringLiteral(".tmp.") + generateUuidV7();
+    QFile out(tmpFile);
     if (out.open(QIODevice::WriteOnly)) {
         out.write(bytes);
+        out.flush();
         out.close();
-        return targetFile;
+
+        if (QFile::rename(tmpFile, targetFile)) {
+            return targetFile;
+        } else if (QFile::exists(targetFile) && QFileInfo(targetFile).size() > 0) {
+            QFile::remove(tmpFile);
+            return targetFile;
+        } else {
+            QFile::remove(targetFile);
+            if (QFile::rename(tmpFile, targetFile)) {
+                return targetFile;
+            }
+            QFile::remove(tmpFile);
+        }
     }
 
     return QString();

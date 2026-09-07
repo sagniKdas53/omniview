@@ -85,14 +85,6 @@ QPixmap ThumbnailManager::getCachedPixmap(const QString& sourcePath) {
     if (QPixmap* p = m_memCache.object(sourcePath)) {
         return *p;
     }
-    const QString thumbPath = Config::getThumbPath(sourcePath);
-    if (QFile::exists(thumbPath)) {
-        QPixmap p(thumbPath);
-        if (!p.isNull()) {
-            m_memCache.insert(sourcePath, new QPixmap(p));
-            return p;
-        }
-    }
     return QPixmap();
 }
 
@@ -107,7 +99,7 @@ void ThumbnailManager::requestPriorityThumbnail(const QString& sourcePath) {
         if (m_pending.contains(sourcePath)) return;
         m_pending.insert(sourcePath);
     }
-    m_threadPool.start(new ThumbnailTask(sourcePath, m_dbPath, this));
+    m_threadPool.start(new ThumbnailTask(sourcePath, m_dbPath, this), 10);
 }
 
 void ThumbnailManager::startBackgroundIndexing() {

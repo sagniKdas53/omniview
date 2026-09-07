@@ -74,9 +74,6 @@ void DragButton::mouseMoveEvent(QMouseEvent* event) {
                 const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
                 mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
 
-                // Pre-populate clipboard for instant paste
-                QApplication::clipboard()->setMimeData(mimeData);
-
                 // Thumbnail badge preview
                 QPixmap preview(validPaths.first());
                 const int badgeMax = 120;
@@ -370,6 +367,12 @@ void ViewerWindow::updateDisplay() {
         m_zoomFactor = static_cast<double>(targetSize.width()) / origSize.width();
     } else {
         targetSize = origSize * m_zoomFactor;
+    }
+
+    constexpr int MAX_VIEW_DIMENSION = 8192;
+    if (targetSize.width() > MAX_VIEW_DIMENSION || targetSize.height() > MAX_VIEW_DIMENSION) {
+        targetSize = targetSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
+        m_zoomFactor = static_cast<double>(targetSize.width()) / origSize.width();
     }
 
     const QPixmap pix = QPixmap::fromImage(

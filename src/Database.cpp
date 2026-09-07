@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDateTime>
 #include <QDebug>
 
 namespace OmniView {
@@ -18,10 +19,19 @@ Database::Database(const QString& dbPath) {
     } else {
         m_dbPath = dbPath;
     }
-    initSchema();
+    // initSchema() is deliberately NOT called here to prevent worker threads
+    // from repeatedly executing 7 DDL statements per generated thumbnail.
 }
 
 Database::~Database() {
+}
+
+QString Database::escapeSqlLike(const QString& str) {
+    QString escaped = str;
+    escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    escaped.replace(QLatin1Char('%'), QStringLiteral("\\%"));
+    escaped.replace(QLatin1Char('_'), QStringLiteral("\\_"));
+    return escaped;
 }
 
 QSqlDatabase Database::getDatabase() {
@@ -52,41 +62,63 @@ bool Database::initSchema() {
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return false;
 
-    QSqlQuery q(db);
-    const QString schema = QStringLiteral(
-        "CREATE TABLE IF NOT EXISTS images ("
-        "    path TEXT PRIMARY KEY,"
-        "    filename TEXT NOT NULL,"
-        "    subfolder TEXT NOT NULL,"
-        "    file_size INTEGER NOT NULL,"
-        "    mtime REAL NOT NULL,"
-        "    width INTEGER DEFAULT 0,"
-        "    height INTEGER DEFAULT 0,"
-        "    aspect_type TEXT DEFAULT 'square',"
-        "    color_name TEXT DEFAULT '',"
-        "    color_r INTEGER DEFAULT 0,"
-        "    color_g INTEGER DEFAULT 0,"
-        "    color_b INTEGER DEFAULT 0,"
-        "    dhash TEXT DEFAULT '',"
-        "    thumb_path TEXT DEFAULT '',"
-        "    is_favorite INTEGER DEFAULT 0,"
-        "    indexed INTEGER DEFAULT 0"
-        ");"
-    );
+    auto executeSchema = [&db]() -> bool {
+        QSqlQuery q(db);
+        const QString schema = QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS images ("
+            "    path TEXT PRIMARY KEY,"
+            "    filename TEXT NOT NULL,"
+            "    subfolder TEXT NOT NULL,"
+            "    file_size INTEGER NOT NULL,"
+            "    mtime REAL NOT NULL,"
+            "    width INTEGER DEFAULT 0,"
+            "    height INTEGER DEFAULT 0,"
+            "    aspect_type TEXT DEFAULT 'square',"
+            "    color_name TEXT DEFAULT '',"
+            "    color_r INTEGER DEFAULT 0,"
+            "    color_g INTEGER DEFAULT 0,"
+            "    color_b INTEGER DEFAULT 0,"
+            "    dhash TEXT DEFAULT '',"
+            "    thumb_path TEXT DEFAULT '',"
+            "    is_favorite INTEGER DEFAULT 0,"
+            "    indexed INTEGER DEFAULT 0"
+            ");"
+        );
 
-    if (!q.exec(schema)) {
-        qWarning() << "Schema creation failed:" << q.lastError().text();
-        return false;
+        if (!q.exec(schema)) {
+            return false;
+        }
+
+        // Note: idx_path is redundant since path is already PRIMARY KEY
+        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_subfolder ON images(subfolder);"));
+        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_color ON images(color_name);"));
+        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_aspect ON images(aspect_type);"));
+        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_mtime ON images(mtime);"));
+        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_favorite ON images(is_favorite);"));
+        return true;
+    };
+
+    if (executeSchema()) {
+        return true;
     }
 
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_path ON images(path);"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_subfolder ON images(subfolder);"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_color ON images(color_name);"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_aspect ON images(aspect_type);"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_mtime ON images(mtime);"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_favorite ON images(is_favorite);"));
+    // If schema creation failed, recover from database corruption
+    qWarning() << "Database schema initialization failed. Attempting recovery from corruption:" << db.lastError().text();
+    const QString connName = db.connectionName();
+    db.close();
+    db = QSqlDatabase();
+    QSqlDatabase::removeDatabase(connName);
 
-    return true;
+    if (QFile::exists(m_dbPath)) {
+        const QString backupPath = m_dbPath + QStringLiteral(".corrupt.") + QString::number(QDateTime::currentMSecsSinceEpoch());
+        QFile::rename(m_dbPath, backupPath);
+        QFile::remove(m_dbPath + QStringLiteral("-wal"));
+        QFile::remove(m_dbPath + QStringLiteral("-shm"));
+    }
+
+    db = getDatabase();
+    if (!db.isOpen()) return false;
+    return executeSchema();
 }
 
 bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
@@ -95,7 +127,10 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return false;
 
-    db.transaction();
+    if (!db.transaction()) {
+        return false;
+    }
+
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "INSERT INTO images (path, filename, subfolder, file_size, mtime, indexed) "
@@ -112,10 +147,17 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
         q.bindValue(2, item.subfolder.isNull() ? QStringLiteral("") : item.subfolder);
         q.bindValue(3, item.fileSize);
         q.bindValue(4, item.mtime);
-        q.exec();
+        if (!q.exec()) {
+            db.rollback();
+            return false;
+        }
     }
 
-    return db.commit();
+    if (!db.commit()) {
+        db.rollback();
+        return false;
+    }
+    return true;
 }
 
 int Database::pruneMissingFiles(const QString& rootDir) {
@@ -126,8 +168,8 @@ int Database::pruneMissingFiles(const QString& rootDir) {
 
     const QString absRoot = QDir(rootDir).absolutePath();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path FROM images WHERE path LIKE ?"));
-    q.addBindValue(absRoot + QStringLiteral("/%"));
+    q.prepare(QStringLiteral("SELECT path FROM images WHERE path LIKE ? ESCAPE '\\'"));
+    q.addBindValue(escapeSqlLike(absRoot) + QStringLiteral("/%"));
     if (!q.exec()) return 0;
 
     QStringList missing;
@@ -150,14 +192,24 @@ int Database::pruneMissingFiles(const QString& rootDir) {
 
     if (missing.isEmpty()) return 0;
 
-    db.transaction();
+    if (!db.transaction()) {
+        return 0;
+    }
+
     QSqlQuery delQ(db);
     delQ.prepare(QStringLiteral("DELETE FROM images WHERE path = ?"));
     for (const QString& p : missing) {
         delQ.bindValue(0, p);
-        delQ.exec();
+        if (!delQ.exec()) {
+            db.rollback();
+            return 0;
+        }
     }
-    db.commit();
+
+    if (!db.commit()) {
+        db.rollback();
+        return 0;
+    }
 
     return missing.size();
 }
@@ -170,7 +222,7 @@ QVector<ImageRecord> Database::getUnindexedPaths() {
     QSqlQuery q(db);
     const QString sql = QStringLiteral(
         "SELECT path, mtime, file_size FROM images "
-        "WHERE indexed = 0 OR thumb_path = '' OR thumb_path LIKE '%.jpg' OR thumb_path LIKE '%pixiv_gallery%' "
+        "WHERE indexed = 0 OR thumb_path = '' "
         "ORDER BY mtime DESC;"
     );
 
@@ -254,8 +306,8 @@ QVector<ImageRecord> Database::queryImages(const QueryFilter& filter) {
 
     if (!filter.rootDir.isEmpty()) {
         const QString absRoot = QDir(filter.rootDir).absolutePath();
-        clauses.append(QStringLiteral("path LIKE ?"));
-        params.append(absRoot + QStringLiteral("/%"));
+        clauses.append(QStringLiteral("path LIKE ? ESCAPE '\\'"));
+        params.append(escapeSqlLike(absRoot) + QStringLiteral("/%"));
     }
 
     if (!filter.subfolder.isEmpty() && filter.subfolder != QStringLiteral("__all__")) {
@@ -353,8 +405,8 @@ QVector<QPair<QString, int>> Database::getSubfoldersWithCounts(const QString& ro
     QString whereSql;
     QString rootPrefix;
     if (!rootDir.isEmpty()) {
-        whereSql = QStringLiteral("WHERE path LIKE ? ");
-        rootPrefix = QDir(rootDir).absolutePath() + QStringLiteral("/%");
+        whereSql = QStringLiteral("WHERE path LIKE ? ESCAPE '\\' ");
+        rootPrefix = escapeSqlLike(QDir(rootDir).absolutePath()) + QStringLiteral("/%");
     }
 
     const QString sql = QStringLiteral(

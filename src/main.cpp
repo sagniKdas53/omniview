@@ -62,8 +62,7 @@ int main(int argc, char* argv[]) {
         appDir + QStringLiteral("/../assets/icon_256.png"),
         appDir + QStringLiteral("/assets/icon.png"),
         appDir + QStringLiteral("/../assets/icon.png"),
-        QDir::homePath() + QStringLiteral("/.local/share/icons/hicolor/256x256/apps/omniview.png"),
-        QStringLiteral("/home/sagnik/Projects/omniview-cpp/assets/icon_256.png")
+        QDir::homePath() + QStringLiteral("/.local/share/icons/hicolor/256x256/apps/omniview.png")
     };
     for (const QString& p : candidatePaths) {
         if (QFile::exists(p)) {

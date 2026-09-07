@@ -17,6 +17,7 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
     , m_thumbMgr(m_db.dbPath())
 {
     Config::ensureDirectories();
+    m_db.initSchema();
 
     setWindowTitle(Config::appTitle());
     resize(1380, 880);
