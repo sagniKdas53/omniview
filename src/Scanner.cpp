@@ -1,10 +1,12 @@
 #include "Scanner.h"
 #include "Config.h"
+#include "ZipUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QDebug>
 
 namespace OmniView {
 
@@ -52,12 +54,47 @@ void Scanner::run() {
         if (relPath.contains(QStringLiteral("/."))) continue;
 
         const QString suffix = QStringLiteral(".") + fi.suffix().toLower();
+
+        // Check for ZIP archives
+        if (suffix == QStringLiteral(".zip")) {
+            const QString relZip = (relPath == QStringLiteral(".")) ? fname : (relPath + QStringLiteral("/") + fname);
+            const QString zipStem = fi.completeBaseName();
+            const QString zipDirPath = fi.absolutePath();
+            const QVector<ZipImageEntry> zipEntries = ZipUtils::listZipImages(fi.absoluteFilePath());
+
+            for (const auto& ze : zipEntries) {
+                if (m_cancelled.load()) break;
+
+                // Prioritize raw extracted files: skip if raw counterpart exists
+                if (ZipUtils::isDuplicateOfRaw(zipDirPath, zipStem, ze.innerPath)) {
+                    continue;
+                }
+
+                ImageRecord rec;
+                rec.path = ZipUtils::makeZipPath(fi.absoluteFilePath(), ze.innerPath);
+                rec.filename = QFileInfo(ze.innerPath).fileName();
+                rec.subfolder = relZip;
+                rec.fileSize = ze.uncompressedSize;
+                rec.mtime = (ze.mtime > 0) ? static_cast<double>(ze.mtime) : static_cast<double>(fi.lastModified().toSecsSinceEpoch());
+
+                batch.append(rec);
+                count++;
+
+                if (batch.size() >= 500) {
+                    db.batchSyncFiles(batch);
+                    batch.clear();
+                    emit progress(count);
+                }
+            }
+            continue;
+        }
+
         if (!Config::isSupportedExtension(suffix)) continue;
 
         ImageRecord rec;
         rec.path = fi.absoluteFilePath();
         rec.filename = fname;
-        rec.subfolder = (relPath == QStringLiteral(".")) ? QString() : relPath;
+        rec.subfolder = (relPath == QStringLiteral(".")) ? QStringLiteral("") : relPath;
         rec.fileSize = fi.size();
         rec.mtime = static_cast<double>(fi.lastModified().toSecsSinceEpoch());
 

@@ -1,7 +1,9 @@
 #include "ColorUtils.h"
+#include "ZipUtils.h"
 
 #include <QFileInfo>
 #include <QDir>
+#include <QBuffer>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QtMath>
@@ -115,16 +117,36 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
     QSize maxSize
 ) {
     ImageFeatures feat;
-    QImageReader reader(sourcePath);
-    reader.setAutoTransform(true);
+    QImage img;
 
-    const QSize origSize = reader.size();
-    if (origSize.isValid()) {
-        feat.width = origSize.width();
-        feat.height = origSize.height();
+    QString zipPath, innerPath;
+    if (ZipUtils::isZipPath(sourcePath, &zipPath, &innerPath)) {
+        const QByteArray bytes = ZipUtils::readZipEntryBytes(zipPath, innerPath);
+        if (bytes.isEmpty()) {
+            return feat;
+        }
+        QBuffer buf;
+        buf.setData(bytes);
+        buf.open(QIODevice::ReadOnly);
+        QImageReader reader(&buf);
+        reader.setAutoTransform(true);
+        const QSize origSize = reader.size();
+        if (origSize.isValid()) {
+            feat.width = origSize.width();
+            feat.height = origSize.height();
+        }
+        img = reader.read();
+    } else {
+        QImageReader reader(sourcePath);
+        reader.setAutoTransform(true);
+        const QSize origSize = reader.size();
+        if (origSize.isValid()) {
+            feat.width = origSize.width();
+            feat.height = origSize.height();
+        }
+        img = reader.read();
     }
 
-    QImage img = reader.read();
     if (img.isNull()) {
         return feat;
     }

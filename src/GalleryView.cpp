@@ -1,6 +1,7 @@
 #include "GalleryView.h"
 #include "GalleryModel.h"
 #include "GalleryDelegate.h"
+#include "ZipUtils.h"
 
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -101,7 +102,14 @@ void GalleryView::invertSelection() {
 }
 
 void GalleryView::copyImageBitmap(const QString& path) {
-    QImage img(path);
+    QImage img;
+    QString zipPath, innerPath;
+    if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
+        const QByteArray bytes = ZipUtils::readZipEntryBytes(zipPath, innerPath);
+        img = QImage::fromData(bytes);
+    } else {
+        img = QImage(path);
+    }
     if (!img.isNull()) {
         QApplication::clipboard()->setImage(img);
     }
@@ -236,7 +244,12 @@ void GalleryView::leaveEvent(QEvent* event) {
 void GalleryView::startDragFiles(const QStringList& paths) {
     QStringList validPaths;
     for (const QString& p : paths) {
-        if (QFile::exists(p)) {
+        if (ZipUtils::isZipPath(p)) {
+            const QString extracted = ZipUtils::ensureExtracted(p);
+            if (!extracted.isEmpty() && QFile::exists(extracted)) {
+                validPaths.append(extracted);
+            }
+        } else if (QFile::exists(p)) {
             validPaths.append(p);
         }
     }
@@ -402,16 +415,24 @@ void GalleryView::copySelectedFiles() {
     if (paths.isEmpty()) return;
 
     QList<QUrl> urls;
+    QStringList resolvedPaths;
     for (const QString& p : paths) {
-        if (QFile::exists(p)) {
+        if (ZipUtils::isZipPath(p)) {
+            const QString extracted = ZipUtils::ensureExtracted(p);
+            if (!extracted.isEmpty() && QFile::exists(extracted)) {
+                urls.append(QUrl::fromLocalFile(extracted));
+                resolvedPaths.append(extracted);
+            }
+        } else if (QFile::exists(p)) {
             urls.append(QUrl::fromLocalFile(p));
+            resolvedPaths.append(p);
         }
     }
     if (urls.isEmpty()) return;
 
     auto* mimeData = new QMimeData();
     mimeData->setUrls(urls);
-    mimeData->setText(paths.join(QStringLiteral("\n")));
+    mimeData->setText(resolvedPaths.join(QStringLiteral("\n")));
 
     QStringList urlStrings;
     for (const QUrl& u : urls) {
@@ -573,14 +594,25 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
 
             auto* actOpenDef = menu.addAction(QStringLiteral("↗️ Open in Default Viewer"));
             connect(actOpenDef, &QAction::triggered, this, [path]() {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                QString target = path;
+                if (ZipUtils::isZipPath(path)) {
+                    target = ZipUtils::ensureExtracted(path);
+                }
+                if (!target.isEmpty() && QFile::exists(target)) {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+                }
             });
 
             auto* actReveal = menu.addAction(QStringLiteral("🗂️ Reveal in File Manager"));
             connect(actReveal, &QAction::triggered, this, [path]() {
-                const QFileInfo fi(path);
-                if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), path})) {
-                    if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), path})) {
+                QString target = path;
+                QString zipPath;
+                if (ZipUtils::isZipPath(path, &zipPath)) {
+                    target = zipPath;
+                }
+                const QFileInfo fi(target);
+                if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), target})) {
+                    if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), target})) {
                         QProcess::startDetached(QStringLiteral("xdg-open"), QStringList{fi.absolutePath()});
                     }
                 }

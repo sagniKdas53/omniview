@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(OmniView VERSION 1.0.0 LANGUAGES CXX)
+project(OmniView VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,8 @@ find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
 
 # Common sources
 set(OMNIVIEW_LIB_SOURCES
+    src/miniz.c
+    src/ZipUtils.cpp
     src/Config.cpp
     src/Database.cpp
     src/ColorUtils.cpp
@@ -25,6 +27,8 @@ set(OMNIVIEW_LIB_SOURCES
 )
 
 set(OMNIVIEW_HEADERS
+    src/miniz.h
+    src/ZipUtils.h
     src/Config.h
     src/Database.h
     src/ColorUtils.h

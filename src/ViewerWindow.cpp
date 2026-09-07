@@ -1,4 +1,5 @@
 #include "ViewerWindow.h"
+#include "ZipUtils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -16,6 +17,7 @@
 #include <QProcess>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QBuffer>
 #include <QDesktopServices>
 #include <QPainter>
 #include <QPainterPath>
@@ -47,7 +49,12 @@ void DragButton::mouseMoveEvent(QMouseEvent* event) {
             }
             QStringList validPaths;
             for (const QString& p : paths) {
-                if (QFile::exists(p)) {
+                if (ZipUtils::isZipPath(p)) {
+                    const QString extracted = ZipUtils::ensureExtracted(p);
+                    if (!extracted.isEmpty() && QFile::exists(extracted)) {
+                        validPaths.append(extracted);
+                    }
+                } else if (QFile::exists(p)) {
                     validPaths.append(p);
                 }
             }
@@ -311,9 +318,20 @@ void ViewerWindow::showImage(const QVector<ImageRecord>& items, int index) {
         const QString path = m_items[m_currentIndex].path;
         m_dragBtn->setFilePath(path);
 
-        QImageReader reader(path);
-        reader.setAutoTransform(true);
-        m_currentImage = reader.read();
+        QString zipPath, innerPath;
+        if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
+            const QByteArray bytes = ZipUtils::readZipEntryBytes(zipPath, innerPath);
+            QBuffer buf;
+            buf.setData(bytes);
+            buf.open(QIODevice::ReadOnly);
+            QImageReader reader(&buf);
+            reader.setAutoTransform(true);
+            m_currentImage = reader.read();
+        } else {
+            QImageReader reader(path);
+            reader.setAutoTransform(true);
+            m_currentImage = reader.read();
+        }
     }
 
     updateDisplay();
@@ -399,8 +417,11 @@ void ViewerWindow::showNext() {
 
 void ViewerWindow::copyFile() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    const QString p = m_items[m_currentIndex].path;
-    if (!QFile::exists(p)) return;
+    QString p = m_items[m_currentIndex].path;
+    if (ZipUtils::isZipPath(p)) {
+        p = ZipUtils::ensureExtracted(p);
+    }
+    if (p.isEmpty() || !QFile::exists(p)) return;
 
     auto* mime = new QMimeData();
     const QList<QUrl> urls = {QUrl::fromLocalFile(p)};
@@ -423,7 +444,13 @@ void ViewerWindow::copyImage() {
 
 void ViewerWindow::openDefaultViewer() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    QDesktopServices::openUrl(QUrl::fromLocalFile(m_items[m_currentIndex].path));
+    QString p = m_items[m_currentIndex].path;
+    if (ZipUtils::isZipPath(p)) {
+        p = ZipUtils::ensureExtracted(p);
+    }
+    if (!p.isEmpty() && QFile::exists(p)) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(p));
+    }
 }
 
 void ViewerWindow::toggleFavorite() {
@@ -436,7 +463,11 @@ void ViewerWindow::toggleFavorite() {
 
 void ViewerWindow::showInFolder() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    const QString p = m_items[m_currentIndex].path;
+    QString p = m_items[m_currentIndex].path;
+    QString zipPath;
+    if (ZipUtils::isZipPath(p, &zipPath)) {
+        p = zipPath; // Highlight the zip archive
+    }
     const QFileInfo fi(p);
     // Try dolphin, nautilus, fallback to xdg-open
     if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), p})) {

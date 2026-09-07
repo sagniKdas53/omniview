@@ -1,10 +1,12 @@
 #include "Database.h"
 #include "Config.h"
+#include "ZipUtils.h"
 
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QThread>
 #include <QFileInfo>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDebug>
 
@@ -23,10 +25,12 @@ Database::~Database() {
 }
 
 QSqlDatabase Database::getDatabase() {
-    const QString connName = QStringLiteral("omniview_conn_%1").arg(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    const QString connName = QStringLiteral("omniview_conn_%1_%2")
+        .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()))
+        .arg(QString::fromUtf8(QCryptographicHash::hash(m_dbPath.toUtf8(), QCryptographicHash::Md5).toHex().left(12)));
     if (QSqlDatabase::contains(connName)) {
         QSqlDatabase db = QSqlDatabase::database(connName);
-        if (db.isOpen()) {
+        if (db.isOpen() && db.databaseName() == m_dbPath) {
             return db;
         }
     }
@@ -105,7 +109,7 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
     for (const auto& item : entries) {
         q.bindValue(0, item.path);
         q.bindValue(1, item.filename);
-        q.bindValue(2, item.subfolder);
+        q.bindValue(2, item.subfolder.isNull() ? QStringLiteral("") : item.subfolder);
         q.bindValue(3, item.fileSize);
         q.bindValue(4, item.mtime);
         q.exec();
@@ -129,7 +133,17 @@ int Database::pruneMissingFiles(const QString& rootDir) {
     QStringList missing;
     while (q.next()) {
         const QString path = q.value(0).toString();
-        if (!QFile::exists(path)) {
+        QString zipPath, innerPath;
+        if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
+            if (!QFile::exists(zipPath)) {
+                missing.append(path);
+            } else {
+                const QFileInfo zfi(zipPath);
+                if (ZipUtils::isDuplicateOfRaw(zfi.absolutePath(), zfi.completeBaseName(), innerPath)) {
+                    missing.append(path); // Prune duplicate so raw file takes precedence
+                }
+            }
+        } else if (!QFile::exists(path)) {
             missing.append(path);
         }
     }
