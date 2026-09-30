@@ -85,7 +85,8 @@ void ThumbnailManager::notifyThumbnailReady(const QString& sourcePath, const QSt
 void ThumbnailManager::onThumbnailGenerated(const QString& sourcePath, const QString& thumbPath, const ImageFeatures& /*feat*/) {
     QMutexLocker lock(&m_mutex);
     if (QFile::exists(thumbPath)) {
-        QPixmap p(thumbPath);
+        // QPixmap(filename) can reuse a global cache entry after an in-place rewrite.
+        QPixmap p = QPixmap::fromImage(QImage(thumbPath));
         if (!p.isNull()) {
             m_memCache.insert(sourcePath, new QPixmap(p));
         }

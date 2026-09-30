@@ -59,10 +59,10 @@ jobs:
       # --- Windows Qt setup ---
       - name: Install Windows Qt
         if: matrix.platform == 'windows'
-        uses: jurplel/install-qt-action@v3
+        uses: jurplel/install-qt-action@v4
         with:
-          version: '5.15.2'
-          arch: 'win64_msvc2019_64'
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
 
       # --- Configure CMake ---
       - name: Configure CMake (Linux)
