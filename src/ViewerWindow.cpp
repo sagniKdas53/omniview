@@ -319,7 +319,9 @@ void ViewerWindow::applyTheme() {
 
 void ViewerWindow::showImage(const QVector<ImageRecord>& items, int index) {
     m_items = items;
-    m_currentIndex = qBound(0, index, m_items.size() - 1);
+    m_currentIndex = m_items.isEmpty() ? -1 : qBound(0, index, static_cast<int>(m_items.size()) - 1);
+    m_currentImage = QImage();
+    m_dragBtn->setFilePath(QString());
     m_fitMode = true;
 
     if (m_currentIndex >= 0 && m_currentIndex < m_items.size()) {
@@ -497,8 +499,15 @@ void ViewerWindow::toggleFavorite() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
     auto& item = m_items[m_currentIndex];
     emit favoriteToggled(m_currentIndex, item.path);
-    item.isFavorite = !item.isFavorite;
-    m_btnFav->setText(item.isFavorite ? QStringLiteral("★ Favorited") : QStringLiteral("⭐ Favorite"));
+}
+
+void ViewerWindow::setFavoriteState(const QString& path, bool favorite) {
+    for (auto& item : m_items) {
+        if (item.path == path) item.isFavorite = favorite;
+    }
+    if (m_currentIndex >= 0 && m_currentIndex < m_items.size() && m_items[m_currentIndex].path == path) {
+        m_btnFav->setText(favorite ? QStringLiteral("★ Favorited") : QStringLiteral("⭐ Favorite"));
+    }
 }
 
 void ViewerWindow::showInFolder() {

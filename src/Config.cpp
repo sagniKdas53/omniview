@@ -29,6 +29,8 @@ QString Config::defaultRootDir() {
 }
 
 QString Config::cacheDir() {
+    const QString overrideDir = qEnvironmentVariable("OMNIVIEW_CACHE_DIR");
+    if (!overrideDir.isEmpty()) return QDir(overrideDir).absolutePath();
     const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
     if (!cache.isEmpty()) {
         return cache + QStringLiteral("/omniview");

@@ -117,7 +117,7 @@ void Scanner::run() {
         db.pruneMissingFiles(absRoot);
     }
 
-    const Stats stats = db.getStats();
+    const Stats stats = db.getStats(absRoot);
     emit finished(count, stats);
 }
 

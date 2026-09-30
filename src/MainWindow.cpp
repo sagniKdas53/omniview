@@ -26,10 +26,13 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
     connect(m_viewerWindow, &ViewerWindow::favoriteToggled, this, [this](int /*idx*/, const QString& path) {
         bool newVal = false;
         if (m_db.toggleFavorite(path, &newVal)) {
+            m_viewerWindow->setFavoriteState(path, newVal);
             const int r = m_model->rowForPath(path);
             if (r >= 0) {
                 m_model->setItemFavorite(r, newVal);
             }
+            refreshFolderList();
+            if (m_favoriteOnly) refreshGallery();
         }
     });
 
@@ -813,7 +816,7 @@ void MainWindow::refreshFolderList() {
     itemAll->setData(Qt::UserRole, QStringLiteral("__all__"));
 
     // 2. Favorites
-    const Stats stats = m_db.getStats();
+    const Stats stats = m_db.getStats(m_currentRootDir);
     auto* itemFav = new QListWidgetItem(QStringLiteral("⭐ Favorites (%1)").arg(stats.favoritesCount), m_folderList);
     itemFav->setData(Qt::UserRole, QStringLiteral("__fav__"));
 
@@ -1064,6 +1067,8 @@ void MainWindow::onFavoriteToggled(int row, const QString& path) {
     bool newVal = false;
     if (m_db.toggleFavorite(path, &newVal)) {
         m_model->setItemFavorite(row, newVal);
+        m_viewerWindow->setFavoriteState(path, newVal);
+        refreshFolderList();
         // If viewing favorites, refresh list
         if (m_favoriteOnly) {
             refreshGallery();

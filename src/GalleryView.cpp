@@ -230,7 +230,11 @@ void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
     }
 }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+void GalleryView::enterEvent(QEnterEvent* event) {
+#else
 void GalleryView::enterEvent(QEvent* event) {
+#endif
     QListView::enterEvent(event);
     if (QApplication::mouseButtons() == Qt::NoButton) {
         m_dragStartPos = QPoint();

@@ -12,6 +12,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +83,7 @@ jobs:
       - name: Configure CMake (Windows)
         if: matrix.platform == 'windows'
         run: |
-          cmake -B build -S . \
-            -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
       # --- Build ---
       - name: Build OmniView (Unix)

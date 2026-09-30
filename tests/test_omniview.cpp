@@ -1,4 +1,6 @@
 #include <QTest>
+#include <QApplication>
+#include <QStandardPaths>
 #include <QSignalSpy>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -326,7 +328,10 @@ private slots:
     }
 
     void testPixivZipsDatasetIfPresent() {
-        const QString pixivDir = QStringLiteral("/home/sagnik/Documents/pixiv_zips");
+        const QString pixivDir = qEnvironmentVariable("OMNIVIEW_TEST_PIXIV_DIR");
+        if (pixivDir.isEmpty()) {
+            QSKIP("Set OMNIVIEW_TEST_PIXIV_DIR to opt into the private dataset test");
+        }
         if (!QDir(pixivDir).exists()) {
             QSKIP("/home/sagnik/Documents/pixiv_zips does not exist, skipping real dataset test");
         }
@@ -449,6 +454,109 @@ private slots:
         QVERIFY(p.isNull());
     }
 
+    void testThumbnailRescanAndCacheMetadata() {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(QDir().mkpath(Config::thumbnailsDir()));
+        const QString source = tmp.filePath("image.png");
+        QImage image(80, 40, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(source));
+        Database db(tmp.filePath("index.db"));
+        QVERIFY(db.initSchema());
+        ImageRecord rec;
+        rec.path = source;
+        rec.filename = "image.png";
+        rec.fileSize = QFileInfo(source).size();
+        rec.mtime = 100;
+        QVERIFY(db.batchSyncFiles({rec}));
+        ThumbnailManager manager(db.dbPath());
+        GalleryModel model;
+        model.setItems({rec});
+        connect(&manager, &ThumbnailManager::thumbnailReady, &model,
+                [&](const QString& path, const QString&, const ImageFeatures& feat) {
+            model.updateItemFeatures(path, feat);
+        });
+        QSignalSpy ready(&manager, &ThumbnailManager::thumbnailReady);
+        manager.requestPriorityThumbnail(source);
+        QTRY_COMPARE(ready.count(), 1);
+        QCOMPARE(model.getItem(0)->width, 80);
+        QCOMPARE(model.getItem(0)->colorName, QString("red"));
+        const QString hash = model.getItem(0)->dhash;
+        manager.requestPriorityThumbnail(source);
+        QTRY_COMPARE(ready.count(), 2);
+        QCOMPARE(model.getItem(0)->width, 80);
+        QCOMPARE(model.getItem(0)->dhash, hash);
+        QCOMPARE(model.getItem(0)->colorName, QString("red"));
+        bool favorite = false;
+        QVERIFY(db.toggleFavorite(source, &favorite));
+        QVERIFY(db.batchSyncFiles({rec}));
+        QVERIFY(db.getUnindexedPaths().isEmpty());
+        image = QImage(40, 80, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(source));
+        rec.fileSize += 1; // Invalidate even when mtime is unchanged.
+        QVERIFY(db.batchSyncFiles({rec}));
+        QCOMPARE(db.getUnindexedPaths().size(), 1);
+        manager.startBackgroundIndexing();
+        QTRY_COMPARE(ready.count(), 3);
+        QCOMPARE(model.getItem(0)->width, 40);
+        QCOMPARE(model.getItem(0)->height, 80);
+        QCOMPARE(model.getItem(0)->colorName, QString("blue"));
+        QueryFilter filter;
+        filter.exactPath = source;
+        QVERIFY(db.queryImages(filter).first().isFavorite);
+        QCOMPARE(manager.getCachedPixmap(source).size(), QSize(180, 360));
+        QSignalSpy completed(&manager, &ThumbnailManager::allCompleted);
+        connect(&manager, &ThumbnailManager::allCompleted, &manager, [&]() {
+            manager.getCachedPixmap(source); // Completion callbacks must not hold the cache mutex.
+        });
+        manager.startBackgroundIndexing();
+        QCOMPARE(completed.count(), 1);
+    }
+
+    void testThumbnailWriteFailure() {
+        QTemporaryDir tmp;
+        QImage image(20, 20, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        const QString source = tmp.filePath("image.png");
+        QVERIFY(image.save(source));
+        QFile blocker(tmp.filePath("blocked"));
+        QVERIFY(blocker.open(QIODevice::WriteOnly));
+        blocker.close();
+        const ImageFeatures feat = ColorUtils::generateThumbnailAndFeatures(
+            source, blocker.fileName() + "/thumb.webp");
+        QVERIFY(!feat.valid);
+    }
+
+    void testViewerEmptyClearsClipboardImage() {
+        QTemporaryDir tmp;
+        QImage image(10, 10, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        ImageRecord rec;
+        rec.path = tmp.filePath("image.png");
+        rec.filename = "image.png";
+        QVERIFY(image.save(rec.path));
+        ViewerWindow viewer;
+        viewer.showImage({rec}, 0);
+        QSignalSpy favoriteRequested(&viewer, &ViewerWindow::favoriteToggled);
+        QVERIFY(QMetaObject::invokeMethod(&viewer, "toggleFavorite", Qt::DirectConnection));
+        QCOMPARE(favoriteRequested.count(), 1);
+        QPushButton* favoriteButton = nullptr;
+        for (auto* button : viewer.findChildren<QPushButton*>()) {
+            if (button->text().contains("Favorite")) favoriteButton = button;
+        }
+        QVERIFY(favoriteButton);
+        QVERIFY(!favoriteButton->text().contains("Favorited"));
+        viewer.setFavoriteState(rec.path, true);
+        QVERIFY(favoriteButton->text().contains("Favorited"));
+        viewer.showImage({}, 0);
+        QVERIFY(viewer.findChild<DragButton*>()->filePath().isEmpty());
+        for (const auto* label : viewer.findChildren<QLabel*>()) {
+            QVERIFY(label->text().isEmpty());
+        }
+    }
+
     void testViewerWindowSensibleSizing() {
         QTemporaryDir tmpDir;
         QVERIFY(tmpDir.isValid());
@@ -484,5 +592,13 @@ private slots:
     }
 };
 
-QTEST_MAIN(TestOmniView)
+int main(int argc, char** argv) {
+    QTemporaryDir cache;
+    if (!cache.isValid()) return 1;
+    qputenv("OMNIVIEW_CACHE_DIR", cache.path().toUtf8());
+    QApplication app(argc, argv);
+    QStandardPaths::setTestModeEnabled(true);
+    TestOmniView test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "test_omniview.moc"

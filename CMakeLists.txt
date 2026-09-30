@@ -79,3 +79,16 @@ target_link_libraries(omniview_tests PRIVATE
 )
 
 add_test(NAME OmniViewTests COMMAND omniview_tests)
+
+set_tests_properties(OmniViewTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(database_regression_tests
+    tests/test_database_regressions.cpp
+    src/Database.cpp src/Config.cpp src/ZipUtils.cpp src/miniz.c
+)
+target_include_directories(database_regression_tests PRIVATE src)
+target_link_libraries(database_regression_tests PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui
+    Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Test
+)
+add_test(NAME DatabaseRegressionTests COMMAND database_regression_tests)
