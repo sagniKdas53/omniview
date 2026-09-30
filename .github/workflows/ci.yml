@@ -121,6 +121,15 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           ctest --test-dir build -C Release --output-on-failure --verbose
+          $testExit = $LASTEXITCODE
+          if (Test-Path build\omniview-test-results.txt) {
+            Get-Content build\omniview-test-results.txt
+          } else {
+            & build\Release\omniview_tests.exe -o windows-test-results.txt,txt
+            Write-Output "Direct test exit code: $LASTEXITCODE"
+            if (Test-Path windows-test-results.txt) { Get-Content windows-test-results.txt }
+          }
+          exit $testExit
 
       # --- Package Artifacts ---
       - name: Prepare Linux Package

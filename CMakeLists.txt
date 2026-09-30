@@ -78,7 +78,7 @@ target_link_libraries(omniview_tests PRIVATE
     Qt${QT_VERSION_MAJOR}::Test
 )
 
-add_test(NAME OmniViewTests COMMAND omniview_tests)
+add_test(NAME OmniViewTests COMMAND omniview_tests -o -,txt -o omniview-test-results.txt,txt)
 
 set_tests_properties(OmniViewTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
