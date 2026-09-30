@@ -200,13 +200,17 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
 
     // Atomic thumbnail write via UUID-v7 temp file
     const QString tmpThumb = targetThumbPath + QStringLiteral(".tmp.") + ZipUtils::generateUuidV7();
-    QImageWriter writer(tmpThumb, format.toLatin1());
-    writer.setQuality(90);
-    bool written = writer.write(thumb);
-    if (!written && format == QStringLiteral("WEBP")) {
-        writer.setFormat("JPEG");
+    bool written = false;
+    {
+        QImageWriter writer(tmpThumb, format.toLatin1());
+        writer.setQuality(90);
         written = writer.write(thumb);
-    }
+        if (!written && format == QStringLiteral("WEBP")) {
+            writer.setFormat("JPEG");
+            written = writer.write(thumb);
+        }
+    } // Close the writer's file handle before renaming on Windows.
+
     if (!written) {
         QFile::remove(tmpThumb);
         return feat;
