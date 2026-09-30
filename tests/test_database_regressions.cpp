@@ -35,7 +35,7 @@ private slots:
         QVERIFY(db.toggleFavorite(pathA));
 
         QueryFilter slash;
-        slash.rootDir = QStringLiteral("/");
+        slash.rootDir = QDir::rootPath();
         const auto all = db.queryImages(slash);
         QCOMPARE(all.size(), 2);
         const Stats rootStats = db.getStats(rootA);
@@ -44,9 +44,9 @@ private slots:
         QCOMPARE(rootStats.indexedImages, 1);
         QCOMPARE(rootStats.favoritesCount, 1);
         QCOMPARE(db.getStats(rootB).favoritesCount, 0);
-        QCOMPARE(db.getSubfoldersWithCounts(QStringLiteral("/")).first().second, 2);
+        QCOMPARE(db.getSubfoldersWithCounts(QDir::rootPath()).first().second, 2);
         QVERIFY(QFile::remove(pathB));
-        QCOMPARE(db.pruneMissingFiles(QStringLiteral("/")), 1);
+        QCOMPARE(db.pruneMissingFiles(QDir::rootPath()), 1);
         QCOMPARE(db.getStats().totalImages, 1);
     }
 

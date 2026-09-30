@@ -29,7 +29,7 @@ jobs:
             artifact_name: omniview-macos
 
           - name: Windows (x64 MSVC)
-            os: windows-latest
+            os: windows-2022
             platform: windows
             artifact_name: omniview-windows-x64
 
@@ -96,6 +96,16 @@ jobs:
         run: |
           cmake --build build --config Release --parallel
 
+      # Deploy the runtime next to test executables before CTest launches them.
+      - name: Deploy Windows test runtime
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          windeployqt --release --no-translations build\Release\omniview_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          windeployqt --release --no-translations build\Release\database_regression_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # --- Run Tests ---
       - name: Run Tests (Linux)
         if: matrix.platform == 'linux'
@@ -110,7 +120,7 @@ jobs:
       - name: Run Tests (Windows)
         if: matrix.platform == 'windows'
         run: |
-          ctest --test-dir build -C Release --output-on-failure
+          ctest --test-dir build -C Release --output-on-failure --verbose
 
       # --- Package Artifacts ---
       - name: Prepare Linux Package
