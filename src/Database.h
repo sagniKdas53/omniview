@@ -38,6 +38,7 @@ struct QueryFilter {
     QString searchTerm;
     bool favoriteOnly = false;
     QString sortBy = QStringLiteral("mtime_desc");
+    QString exactPath;
 };
 
 struct Stats {
@@ -63,7 +64,7 @@ public:
     bool toggleFavorite(const QString& path, bool* outNewVal = nullptr);
     QVector<ImageRecord> queryImages(const QueryFilter& filter);
     QVector<QPair<QString, int>> getSubfoldersWithCounts(const QString& rootDir);
-    Stats getStats();
+    Stats getStats(const QString& rootDir = QString());
     QMap<QString, QString> getAllHashesForPaths(const QStringList& paths);
 
     QString dbPath() const { return m_dbPath; }

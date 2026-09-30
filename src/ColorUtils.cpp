@@ -185,9 +185,7 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
     feat.colorB = static_cast<int>(sumB / totalPixels);
 
     QColor avgColor(feat.colorR, feat.colorG, feat.colorB);
-    qreal h = 0.0, s = 0.0, v = 0.0;
-    avgColor.getHsvF(&h, &s, &v);
-    feat.colorName = classifyHsv(h, s, v);
+    feat.colorName = classifyHsv(avgColor.hsvHueF(), avgColor.hsvSaturationF(), avgColor.valueF());
 
     // dHash from thumbnail (perceptually equivalent, 20x faster)
     feat.dhash = computeDHash(thumb);
@@ -202,23 +200,26 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
 
     // Atomic thumbnail write via UUID-v7 temp file
     const QString tmpThumb = targetThumbPath + QStringLiteral(".tmp.") + ZipUtils::generateUuidV7();
-    QImageWriter writer(tmpThumb, format.toLatin1());
-    writer.setQuality(90);
-    if (!writer.write(thumb)) {
-        // Fallback to JPEG if WEBP writer fails
-        if (format == QStringLiteral("WEBP")) {
+    bool written = false;
+    {
+        QImageWriter writer(tmpThumb, format.toLatin1());
+        writer.setQuality(90);
+        written = writer.write(thumb);
+        if (!written && format == QStringLiteral("WEBP")) {
             writer.setFormat("JPEG");
-            writer.write(thumb);
+            written = writer.write(thumb);
         }
-    }
+    } // Close the writer's file handle before renaming on Windows.
 
-    if (QFile::exists(tmpThumb) && QFileInfo(tmpThumb).size() > 0) {
-        if (!QFile::rename(tmpThumb, targetThumbPath)) {
-            QFile::remove(targetThumbPath);
-            QFile::rename(tmpThumb, targetThumbPath);
-        }
-    } else {
+    if (!written) {
         QFile::remove(tmpThumb);
+        return feat;
+    }
+    if (!QFile::rename(tmpThumb, targetThumbPath)) {
+        if (!QFile::remove(targetThumbPath) || !QFile::rename(tmpThumb, targetThumbPath)) {
+            QFile::remove(tmpThumb);
+            return feat;
+        }
     }
 
     feat.thumbPath = targetThumbPath;

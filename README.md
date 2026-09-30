@@ -1,6 +1,6 @@
 # OmniView CPP
 
-OmniView CPP is a native, high-performance C++ implementation of OmniView built with **Qt 5 (C++17)**. It delivers instant native startup (~15ms), minimal memory footprint, zero GIL/Python runtime overhead, and 100% native Linux Wayland and X11 drag-and-drop out-of-the-box with zero helper windows.
+OmniView CPP is a native, high-performance C++ implementation of OmniView built with **Qt 5 or Qt 6 (C++17)**. It delivers instant native startup (~15ms), minimal memory footprint, zero GIL/Python runtime overhead, and 100% native Linux Wayland and X11 drag-and-drop out-of-the-box with zero helper windows.
 
 ---
 
@@ -43,7 +43,7 @@ OmniView CPP is a native, high-performance C++ implementation of OmniView built 
 ### Prerequisites
 - CMake 3.16+
 - GCC / G++ 11+ (with C++17 support)
-- Qt 5 (Widgets, Core, Gui, Sql, Concurrent, Test)
+- Qt 5 or Qt 6 (Widgets, Core, Gui, Sql, Concurrent, Test)
 
 ### Build
 ```bash
@@ -53,10 +53,15 @@ cmake --build build -j$(nproc)
 
 ### Run Tests
 ```bash
-./build/omniview_tests
+ctest --test-dir build --output-on-failure
 ```
+
+CTest runs widget tests with the offscreen Qt platform. The optional private dataset
+test runs only when `OMNIVIEW_TEST_PIXIV_DIR` points to the expected fixture.
 
 ### Run Application
 ```bash
 ./build/omniview-cpp [optional_image_directory]
 ```
+
+Set `OMNIVIEW_CACHE_DIR` to choose a separate cache and database directory.

@@ -105,7 +105,14 @@ void GalleryModel::updateItemFeatures(const QString& path, const ImageFeatures& 
     const int row = rowForPath(path);
     if (row < 0 || row >= m_items.size()) return;
 
+    if (!feat.valid) return;
     ImageRecord& item = m_items[row];
+    if (feat.width <= 0 || feat.height <= 0) {
+        item.thumbPath = feat.thumbPath;
+        const QModelIndex idx = index(row, 0);
+        emit dataChanged(idx, idx, {GalleryRoles::ThumbPathRole});
+        return;
+    }
     item.width = feat.width;
     item.height = feat.height;
     item.aspectType = feat.aspectType;

@@ -12,6 +12,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,7 @@ jobs:
             artifact_name: omniview-macos
 
           - name: Windows (x64 MSVC)
-            os: windows-latest
+            os: windows-2022
             platform: windows
             artifact_name: omniview-windows-x64
 
@@ -57,10 +59,10 @@ jobs:
       # --- Windows Qt setup ---
       - name: Install Windows Qt
         if: matrix.platform == 'windows'
-        uses: jurplel/install-qt-action@v3
+        uses: jurplel/install-qt-action@v4
         with:
-          version: '5.15.2'
-          arch: 'win64_msvc2019_64'
+          version: '6.8.3'
+          arch: 'win64_msvc2022_64'
 
       # --- Configure CMake ---
       - name: Configure CMake (Linux)
@@ -81,8 +83,7 @@ jobs:
       - name: Configure CMake (Windows)
         if: matrix.platform == 'windows'
         run: |
-          cmake -B build -S . \
-            -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
       # --- Build ---
       - name: Build OmniView (Unix)
@@ -94,6 +95,16 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           cmake --build build --config Release --parallel
+
+      # Deploy the runtime next to test executables before CTest launches them.
+      - name: Deploy Windows test runtime
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          windeployqt --release --no-translations build\Release\omniview_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          windeployqt --release --no-translations build\Release\database_regression_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # --- Run Tests ---
       - name: Run Tests (Linux)
@@ -109,7 +120,16 @@ jobs:
       - name: Run Tests (Windows)
         if: matrix.platform == 'windows'
         run: |
-          ctest --test-dir build -C Release --output-on-failure
+          ctest --test-dir build -C Release --output-on-failure --verbose
+          $testExit = $LASTEXITCODE
+          if (Test-Path build\omniview-test-results.txt) {
+            Get-Content build\omniview-test-results.txt
+          } else {
+            & build\Release\omniview_tests.exe -o windows-test-results.txt,txt
+            Write-Output "Direct test exit code: $LASTEXITCODE"
+            if (Test-Path windows-test-results.txt) { Get-Content windows-test-results.txt }
+          }
+          exit $testExit
 
       # --- Package Artifacts ---
       - name: Prepare Linux Package

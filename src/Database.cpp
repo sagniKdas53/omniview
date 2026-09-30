@@ -13,6 +13,18 @@
 
 namespace OmniView {
 
+namespace {
+
+QString rootPathPattern(const QString& rootDir) {
+    const QString absRoot = QDir(rootDir).absolutePath();
+    const QString escaped = Database::escapeSqlLike(absRoot);
+    return escaped + (absRoot.endsWith(QLatin1Char('/'))
+        ? QStringLiteral("%")
+        : QStringLiteral("/%"));
+}
+
+}
+
 Database::Database(const QString& dbPath) {
     if (dbPath.isEmpty()) {
         m_dbPath = Config::dbPath();
@@ -62,7 +74,9 @@ bool Database::initSchema() {
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return false;
 
-    auto executeSchema = [&db]() -> bool {
+    QString schemaError;
+    QString schemaNativeCode;
+    auto executeSchema = [&db, &schemaError, &schemaNativeCode]() -> bool {
         QSqlQuery q(db);
         const QString schema = QStringLiteral(
             "CREATE TABLE IF NOT EXISTS images ("
@@ -86,15 +100,26 @@ bool Database::initSchema() {
         );
 
         if (!q.exec(schema)) {
+            schemaError = q.lastError().text();
+            schemaNativeCode = q.lastError().nativeErrorCode();
             return false;
         }
 
-        // Note: idx_path is redundant since path is already PRIMARY KEY
-        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_subfolder ON images(subfolder);"));
-        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_color ON images(color_name);"));
-        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_aspect ON images(aspect_type);"));
-        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_mtime ON images(mtime);"));
-        q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_favorite ON images(is_favorite);"));
+        // path already has an index through its PRIMARY KEY.
+        const QStringList indexes = {
+            QStringLiteral("CREATE INDEX IF NOT EXISTS idx_subfolder ON images(subfolder);"),
+            QStringLiteral("CREATE INDEX IF NOT EXISTS idx_color ON images(color_name);"),
+            QStringLiteral("CREATE INDEX IF NOT EXISTS idx_aspect ON images(aspect_type);"),
+            QStringLiteral("CREATE INDEX IF NOT EXISTS idx_mtime ON images(mtime);"),
+            QStringLiteral("CREATE INDEX IF NOT EXISTS idx_favorite ON images(is_favorite);")
+        };
+        for (const auto& index : indexes) {
+            if (!q.exec(index)) {
+                schemaError = q.lastError().text();
+                schemaNativeCode = q.lastError().nativeErrorCode();
+                return false;
+            }
+        }
         return true;
     };
 
@@ -102,8 +127,15 @@ bool Database::initSchema() {
         return true;
     }
 
-    // If schema creation failed, recover from database corruption
-    qWarning() << "Database schema initialization failed. Attempting recovery from corruption:" << db.lastError().text();
+    if (schemaNativeCode != QStringLiteral("11") && schemaNativeCode != QStringLiteral("26")) {
+        qWarning() << "Database schema initialization failed:" << schemaError
+                   << "(native code" << schemaNativeCode << ")";
+        return false;
+    }
+
+    // Recover only from SQLite corruption/not-a-database errors.
+    qWarning() << "Database schema initialization failed. Attempting recovery from corruption:"
+               << schemaError << "(native code" << schemaNativeCode << ")";
     const QString connName = db.connectionName();
     db.close();
     db = QSqlDatabase();
@@ -111,7 +143,10 @@ bool Database::initSchema() {
 
     if (QFile::exists(m_dbPath)) {
         const QString backupPath = m_dbPath + QStringLiteral(".corrupt.") + QString::number(QDateTime::currentMSecsSinceEpoch());
-        QFile::rename(m_dbPath, backupPath);
+        if (!QFile::rename(m_dbPath, backupPath)) {
+            qWarning() << "Failed to preserve corrupt database:" << m_dbPath;
+            return false;
+        }
         QFile::remove(m_dbPath + QStringLiteral("-wal"));
         QFile::remove(m_dbPath + QStringLiteral("-shm"));
     }
@@ -137,8 +172,10 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
         "VALUES (?, ?, ?, ?, ?, 0) "
         "ON CONFLICT(path) DO UPDATE SET "
         "    file_size = excluded.file_size, "
-        "    mtime = excluded.mtime "
-        "WHERE images.mtime != excluded.mtime;"
+        "    mtime = excluded.mtime, indexed = 0, thumb_path = '', "
+        "    width = 0, height = 0, aspect_type = 'square', color_name = '', "
+        "    color_r = 0, color_g = 0, color_b = 0, dhash = '' "
+        "WHERE images.mtime != excluded.mtime OR images.file_size != excluded.file_size;"
     ));
 
     for (const auto& item : entries) {
@@ -169,7 +206,7 @@ int Database::pruneMissingFiles(const QString& rootDir) {
     const QString absRoot = QDir(rootDir).absolutePath();
     QSqlQuery q(db);
     q.prepare(QStringLiteral("SELECT path FROM images WHERE path LIKE ? ESCAPE '\\'"));
-    q.addBindValue(escapeSqlLike(absRoot) + QStringLiteral("/%"));
+    q.addBindValue(rootPathPattern(absRoot));
     if (!q.exec()) return 0;
 
     QStringList missing;
@@ -304,10 +341,15 @@ QVector<ImageRecord> Database::queryImages(const QueryFilter& filter) {
     QStringList clauses;
     QVector<QVariant> params;
 
+    if (!filter.exactPath.isEmpty()) {
+        clauses.append(QStringLiteral("path = ?"));
+        params.append(filter.exactPath);
+    }
+
     if (!filter.rootDir.isEmpty()) {
         const QString absRoot = QDir(filter.rootDir).absolutePath();
         clauses.append(QStringLiteral("path LIKE ? ESCAPE '\\'"));
-        params.append(escapeSqlLike(absRoot) + QStringLiteral("/%"));
+        params.append(rootPathPattern(absRoot));
     }
 
     if (!filter.subfolder.isEmpty() && filter.subfolder != QStringLiteral("__all__")) {
@@ -334,8 +376,8 @@ QVector<ImageRecord> Database::queryImages(const QueryFilter& filter) {
     }
 
     if (!filter.searchTerm.isEmpty()) {
-        clauses.append(QStringLiteral("(filename LIKE ? OR subfolder LIKE ?)"));
-        const QString pattern = QStringLiteral("%%1%").arg(filter.searchTerm.trimmed());
+        clauses.append(QStringLiteral("(filename LIKE ? ESCAPE '\\' OR subfolder LIKE ? ESCAPE '\\')"));
+        const QString pattern = QStringLiteral("%") + escapeSqlLike(filter.searchTerm.trimmed()) + QStringLiteral("%");
         params.append(pattern);
         params.append(pattern);
     }
@@ -406,7 +448,7 @@ QVector<QPair<QString, int>> Database::getSubfoldersWithCounts(const QString& ro
     QString rootPrefix;
     if (!rootDir.isEmpty()) {
         whereSql = QStringLiteral("WHERE path LIKE ? ESCAPE '\\' ");
-        rootPrefix = escapeSqlLike(QDir(rootDir).absolutePath()) + QStringLiteral("/%");
+        rootPrefix = rootPathPattern(rootDir);
     }
 
     const QString sql = QStringLiteral(
@@ -431,22 +473,37 @@ QVector<QPair<QString, int>> Database::getSubfoldersWithCounts(const QString& ro
     return list;
 }
 
-Stats Database::getStats() {
+Stats Database::getStats(const QString& rootDir) {
     Stats s;
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return s;
 
+    QString whereSql;
+    QString rootPattern;
+    if (!rootDir.isEmpty()) {
+        whereSql = QStringLiteral(" WHERE path LIKE ? ESCAPE '\\'");
+        rootPattern = rootPathPattern(rootDir);
+    }
+
     QSqlQuery q(db);
-    if (q.exec(QStringLiteral("SELECT COUNT(*), SUM(file_size) FROM images;")) && q.next()) {
+    q.prepare(QStringLiteral("SELECT COUNT(*), COALESCE(SUM(file_size), 0) FROM images") + whereSql + QStringLiteral(";"));
+    if (!rootPattern.isEmpty()) q.addBindValue(rootPattern);
+    if (q.exec() && q.next()) {
         s.totalImages = q.value(0).toInt();
         s.totalBytes = q.value(1).toLongLong();
     }
 
-    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM images WHERE indexed = 1;")) && q.next()) {
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM images WHERE indexed = 1")
+              + (rootDir.isEmpty() ? QStringLiteral(";") : QStringLiteral(" AND path LIKE ? ESCAPE '\\';")));
+    if (!rootPattern.isEmpty()) q.addBindValue(rootPattern);
+    if (q.exec() && q.next()) {
         s.indexedImages = q.value(0).toInt();
     }
 
-    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM images WHERE is_favorite = 1;")) && q.next()) {
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM images WHERE is_favorite = 1")
+              + (rootDir.isEmpty() ? QStringLiteral(";") : QStringLiteral(" AND path LIKE ? ESCAPE '\\';")));
+    if (!rootPattern.isEmpty()) q.addBindValue(rootPattern);
+    if (q.exec() && q.next()) {
         s.favoritesCount = q.value(0).toInt();
     }
 
@@ -462,7 +519,7 @@ QMap<QString, QString> Database::getAllHashesForPaths(const QStringList& paths) 
 
     const int chunkSize = 800;
     for (int i = 0; i < paths.size(); i += chunkSize) {
-        const int count = qMin(chunkSize, paths.size() - i);
+        const int count = qMin(chunkSize, static_cast<int>(paths.size()) - i);
         QStringList placeholders;
         placeholders.reserve(count);
         for (int k = 0; k < count; ++k) placeholders.append(QStringLiteral("?"));

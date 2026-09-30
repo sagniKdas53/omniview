@@ -42,6 +42,7 @@ public:
 
     void showImage(const QVector<ImageRecord>& items, int index);
     void setDarkMode(bool dark);
+    void setFavoriteState(const QString& path, bool favorite);
 
 signals:
     void favoriteToggled(int index, const QString& path);

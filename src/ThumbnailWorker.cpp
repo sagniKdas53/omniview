@@ -19,8 +19,21 @@ ThumbnailTask::ThumbnailTask(const QString& sourcePath, const QString& dbPath, T
 void ThumbnailTask::run() {
     const QString thumbPath = Config::getThumbPath(m_sourcePath);
     QFileInfo fi(thumbPath);
-    if (fi.exists() && fi.size() > 0) {
+    Database db(m_dbPath);
+    QueryFilter filter;
+    filter.exactPath = m_sourcePath;
+    const auto records = db.queryImages(filter);
+    if (fi.exists() && fi.size() > 0 && !records.isEmpty() && records.first().indexed) {
+        const auto& rec = records.first();
         ImageFeatures feat;
+        feat.width = rec.width;
+        feat.height = rec.height;
+        feat.aspectType = rec.aspectType;
+        feat.colorName = rec.colorName;
+        feat.colorR = rec.colorR;
+        feat.colorG = rec.colorG;
+        feat.colorB = rec.colorB;
+        feat.dhash = rec.dhash;
         feat.thumbPath = thumbPath;
         feat.valid = true;
         m_manager->notifyThumbnailReady(m_sourcePath, thumbPath, feat);
@@ -32,7 +45,6 @@ void ThumbnailTask::run() {
     );
 
     if (feat.valid) {
-        Database db(m_dbPath);
         db.updateImageFeatures(
             m_sourcePath, feat.width, feat.height, feat.aspectType,
             feat.colorName, feat.colorR, feat.colorG, feat.colorB,
@@ -58,22 +70,23 @@ ThumbnailManager::~ThumbnailManager() {
 
 void ThumbnailManager::notifyThumbnailReady(const QString& sourcePath, const QString& thumbPath, const ImageFeatures& feat) {
     QMetaObject::invokeMethod(this, [this, sourcePath, thumbPath, feat]() {
+        bool completed = false;
         {
             QMutexLocker lock(&m_mutex);
             m_pending.remove(sourcePath);
-            const bool empty = m_pending.isEmpty();
-            if (empty && m_isBackgroundRunning) {
-                emit allCompleted();
-            }
+            completed = m_pending.isEmpty() && m_isBackgroundRunning;
+            if (completed) m_isBackgroundRunning = false;
         }
         emit thumbnailReady(sourcePath, thumbPath, feat);
+        if (completed) emit allCompleted();
     }, Qt::QueuedConnection);
 }
 
 void ThumbnailManager::onThumbnailGenerated(const QString& sourcePath, const QString& thumbPath, const ImageFeatures& /*feat*/) {
     QMutexLocker lock(&m_mutex);
-    if (!m_memCache.contains(sourcePath) && QFile::exists(thumbPath)) {
-        QPixmap p(thumbPath);
+    if (QFile::exists(thumbPath)) {
+        // QPixmap(filename) can reuse a global cache entry after an in-place rewrite.
+        QPixmap p = QPixmap::fromImage(QImage(thumbPath));
         if (!p.isNull()) {
             m_memCache.insert(sourcePath, new QPixmap(p));
         }
@@ -114,6 +127,13 @@ void ThumbnailManager::startBackgroundIndexing() {
         }
         m_threadPool.start(new ThumbnailTask(rec.path, m_dbPath, this));
     }
+    bool completed = false;
+    {
+        QMutexLocker lock(&m_mutex);
+        completed = m_pending.isEmpty();
+        if (completed) m_isBackgroundRunning = false;
+    }
+    if (completed) emit allCompleted();
 }
 
 } // namespace OmniView
