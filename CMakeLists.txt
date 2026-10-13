@@ -24,6 +24,8 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Conc
 # Applied to every target (including vendored miniz) so instrumentation is
 # consistent; only *warnings* are restricted to project sources.
 if(OMNIVIEW_SANITIZE)
+    # Accept "address,undefined" as well as "address;undefined".
+    string(REPLACE "," ";" OMNIVIEW_SANITIZE "${OMNIVIEW_SANITIZE}")
     if(MSVC)
         message(FATAL_ERROR "OMNIVIEW_SANITIZE is only supported with GCC/Clang")
     endif()
@@ -130,3 +132,7 @@ omniview_add_test(imaging_tests             tests/test_imaging.cpp)
 omniview_add_test(zip_scanner_tests         tests/test_zip_scanner.cpp)
 omniview_add_test(thumbnail_tests           tests/test_thumbnails.cpp)
 omniview_add_test(ui_tests                  tests/test_ui.cpp)
+# The viewer's HiDPI rendering, at a device pixel ratio of 2.
+add_test(NAME ui_tests_hidpi COMMAND ui_tests viewerBackingStoreIsBounded)
+set_tests_properties(ui_tests_hidpi PROPERTIES
+    ENVIRONMENT "${OMNIVIEW_TEST_ENV};QT_SCALE_FACTOR=2" TIMEOUT 300)

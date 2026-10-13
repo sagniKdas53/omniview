@@ -371,12 +371,15 @@ void ViewerWindow::updateDisplay() {
         targetSize = targetSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
     }
 
-    // Render at device resolution so HiDPI screens get crisp pixels and
-    // "1:1" means one image pixel per physical pixel.
-    const qreal dpr = devicePixelRatioF();
+    // Render at device resolution so HiDPI screens get crisp pixels, keeping
+    // the backing store within MAX_VIEW_DIMENSION device pixels.
+    QSize deviceSize = (QSizeF(targetSize) * devicePixelRatioF()).toSize().expandedTo(QSize(1, 1));
+    if (deviceSize.width() > MAX_VIEW_DIMENSION || deviceSize.height() > MAX_VIEW_DIMENSION) {
+        deviceSize = deviceSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
+    }
     QPixmap pix = QPixmap::fromImage(
-        m_currentImage.scaled(targetSize * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    pix.setDevicePixelRatio(dpr);
+        m_currentImage.scaled(deviceSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    pix.setDevicePixelRatio(static_cast<qreal>(pix.width()) / targetSize.width());
     m_imageLabel->setPixmap(pix);
     m_imageLabel->setFixedSize(targetSize);
 

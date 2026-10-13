@@ -12,6 +12,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace OmniView {
@@ -183,8 +184,15 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
     reader.setAutoTransform(true);
 
     const QSize storedSize = reader.size();
+    // JPEG (libjpeg, up to 1/8 per side) and WebP decode straight to the
+    // reduced size, so they may take larger sources. Other handlers that
+    // advertise ScaledSize (e.g. PNG) decode in full and scale afterwards.
+    const QByteArray format = reader.format();
+    const bool decodesReduced = boundingBox.isValid()
+        && (format == "jpeg" || format == "jpg" || format == "webp");
+    const qint64 pixelLimit = decodesReduced ? MAX_IMAGE_PIXELS * 64 : MAX_IMAGE_PIXELS;
     if (storedSize.isValid()
-        && static_cast<qint64>(storedSize.width()) * storedSize.height() > MAX_IMAGE_PIXELS) {
+        && static_cast<qint64>(storedSize.width()) * storedSize.height() > pixelLimit) {
         return fail(QStringLiteral("Image is too large (%1×%2)")
                         .arg(storedSize.width()).arg(storedSize.height()));
     }
@@ -271,9 +279,9 @@ bool ColorUtils::writeThumbnailAtomically(const QImage& thumb, const QString& ta
         QImageWriter writer(&buf, "webp");
         writer.setQuality(90);
         if (!writer.write(thumb)) {
-            static bool warned = false;
-            if (!warned) {
-                warned = true;
+            // Thumbnails are written from several pool threads.
+            static std::atomic<bool> warned{false};
+            if (!warned.exchange(true)) {
                 qWarning() << "WebP encoding unavailable (" << writer.errorString()
                            << "); writing JPEG thumbnails. Install the Qt image formats plugin.";
             }

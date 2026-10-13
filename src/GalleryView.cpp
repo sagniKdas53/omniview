@@ -573,16 +573,21 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
         connect(actClear, &QAction::triggered, this, &GalleryView::clearAllSelection);
 
     } else if (clicked) {
-        // Copy the record and keep a persistent index: menu.exec() runs an
-        // event loop, and a refresh can reorder or reset rows meanwhile.
+        // Copy the record and resolve the row by path when an action runs:
+        // menu.exec() runs an event loop, and a refresh meanwhile resets the
+        // model, which invalidates even persistent indexes.
         const ImageRecord itemRecord = *clicked;
         const QString path = itemRecord.path;
-        const QPersistentModelIndex pidx(idx);
+        const auto currentRow = [this, path]() {
+            const GalleryModel* m = galleryModel();
+            return m ? m->rowForPath(path) : -1;
+        };
         const bool isSelected = selectionModel() && selectionModel()->isSelected(idx);
 
         const auto* actOpen = menu.addAction(QStringLiteral("🔍 Open in Viewer (Return)"));
-        connect(actOpen, &QAction::triggered, this, [this, itemRecord, pidx]() {
-            emit openViewerRequested(itemRecord, pidx.isValid() ? pidx.row() : -1);
+        connect(actOpen, &QAction::triggered, this, [this, itemRecord, currentRow]() {
+            const int row = currentRow();
+            if (row >= 0) emit openViewerRequested(itemRecord, row);
         });
 
         const auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach"));
@@ -591,9 +596,10 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
         });
 
         const auto* actToggleSel = menu.addAction(isSelected ? QStringLiteral("☑️ Deselect") : QStringLiteral("☑️ Select"));
-        connect(actToggleSel, &QAction::triggered, this, [this, pidx, isSelected]() {
-            if (selectionModel() && pidx.isValid()) {
-                selectionModel()->select(QModelIndex(pidx), isSelected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select);
+        connect(actToggleSel, &QAction::triggered, this, [this, currentRow, isSelected]() {
+            const int row = currentRow();
+            if (selectionModel() && model() && row >= 0) {
+                selectionModel()->select(model()->index(row, 0), isSelected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select);
             }
         });
 
@@ -634,8 +640,8 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
         }
 
         const auto* actFav = menu.addAction(itemRecord.isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
-        connect(actFav, &QAction::triggered, this, [this, pidx, path]() {
-            emit favoriteToggled(pidx.isValid() ? pidx.row() : -1, path);
+        connect(actFav, &QAction::triggered, this, [this, currentRow, path]() {
+            emit favoriteToggled(currentRow(), path);
         });
 
         menu.addSeparator();

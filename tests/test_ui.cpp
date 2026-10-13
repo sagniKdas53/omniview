@@ -5,13 +5,17 @@
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QtTest>
+
+#include <functional>
 
 #include "Config.h"
 #include "Database.h"
@@ -54,6 +58,27 @@ void sendMouse(QWidget* target, QEvent::Type type, const QPoint& pos, Qt::MouseB
 
 QPoint centerOf(GalleryView& view, int row) {
     return view.visualRect(view.model()->index(row, 0)).center();
+}
+
+// Opens the card context menu at row, runs duringMenu while it is open, then
+// triggers the first action whose text contains actionText.
+void runCardMenu(GalleryView& view, int row, const QString& actionText,
+                 const std::function<void()>& duringMenu) {
+    QTimer::singleShot(0, &view, [&view, actionText, duringMenu]() {
+        auto* menu = view.findChild<QMenu*>();
+        if (!menu) return;
+        duringMenu();
+        for (QAction* a : menu->actions()) {
+            if (a->text().contains(actionText)) {
+                a->trigger();
+                break;
+            }
+        }
+        menu->close();
+    });
+    const QPoint pos = centerOf(view, row);
+    QContextMenuEvent ev(QContextMenuEvent::Mouse, pos, view.viewport()->mapToGlobal(pos));
+    QApplication::sendEvent(view.viewport(), &ev);
 }
 
 struct ViewFixture {
@@ -377,6 +402,33 @@ private slots:
         QCOMPARE(f.view.getSelectedRows(), QVector<int>{250});
     }
 
+    void cardMenuActionsSurviveModelRefresh() {
+        // A refresh while the menu is open resets the model, which invalidates
+        // persistent indexes; the actions must still find the clicked card.
+        ViewFixture f(6);
+        QVector<ImageRecord> reversed = records(6);
+        std::reverse(reversed.begin(), reversed.end()); // img2 moves to row 3
+        const QString img2 = QStringLiteral("/media/img2.jpg");
+
+        QSignalSpy open(&f.view, &GalleryView::openViewerRequested);
+        runCardMenu(f.view, 2, QStringLiteral("Open in Viewer"), [&]() { f.model.setItems(reversed); });
+        QCOMPARE(open.count(), 1);
+        QCOMPARE(open.first().at(0).value<ImageRecord>().path, img2);
+        QCOMPARE(open.first().at(1).toInt(), 3);
+
+        f.model.setItems(records(6));
+        f.view.selectionModel()->clearSelection();
+        runCardMenu(f.view, 2, QStringLiteral("Select"), [&]() { f.model.setItems(reversed); });
+        QCOMPARE(f.view.getSelectedPaths(), QStringList{img2});
+
+        f.model.setItems(records(6));
+        QSignalSpy fav(&f.view, &GalleryView::favoriteToggled);
+        runCardMenu(f.view, 2, QStringLiteral("Favorite"), [&]() { f.model.setItems(reversed); });
+        QCOMPARE(fav.count(), 1);
+        QCOMPARE(fav.first().at(0).toInt(), 3);
+        QCOMPARE(fav.first().at(1).toString(), img2);
+    }
+
     void favouriteShortcutRequiresNoModifiers() {
         ViewFixture f(3);
         f.view.setCurrentIndex(f.model.index(1, 0));
@@ -461,6 +513,42 @@ private slots:
         QVERIFY(fit < 0.1);
         QTest::keyClick(&viewer, Qt::Key_Minus);
         QVERIFY(viewer.zoomFactor() < fit);
+    }
+
+    void viewerBackingStoreIsBounded() {
+        // Also run with QT_SCALE_FACTOR=2 (ui_tests_hidpi): the cap must hold
+        // in device pixels, not just logical ones.
+        QTemporaryDir tmp;
+        ImageRecord wide;
+        wide.path = tmp.filePath(QStringLiteral("wide.png"));
+        wide.filename = QStringLiteral("wide.png");
+        QVERIFY(saveImage(wide.path, 1000, 100));
+        ViewerWindow viewer;
+        viewer.resize(900, 600);
+        viewer.showImage({wide}, 0);
+        QVERIFY(QTest::qWaitForWindowExposed(&viewer));
+        for (int i = 0; i < 100 && viewer.zoomFactor() < ViewerWindow::MAX_ZOOM; ++i) {
+            QTest::keyClick(&viewer, Qt::Key_Plus);
+        }
+        QCOMPARE(viewer.zoomFactor(), ViewerWindow::MAX_ZOOM);
+        const QLabel* label = nullptr;
+        for (const QLabel* l : viewer.findChildren<QLabel*>()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            const QPixmap pix = l->pixmap();
+#elif QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+            const QPixmap pix = l->pixmap(Qt::ReturnByValue);
+#else
+            const QPixmap pix = l->pixmap() ? *l->pixmap() : QPixmap();
+#endif
+            if (!pix.isNull()) {
+                label = l;
+                QVERIFY2(pix.width() <= ViewerWindow::MAX_VIEW_DIMENSION
+                             && pix.height() <= ViewerWindow::MAX_VIEW_DIMENSION,
+                         qPrintable(QStringLiteral("%1x%2").arg(pix.width()).arg(pix.height())));
+                QCOMPARE(qRound(pix.width() / pix.devicePixelRatio()), label->width());
+            }
+        }
+        QVERIFY(label);
     }
 
     void viewerWheelZoomsInsideScrollArea() {

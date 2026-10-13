@@ -8,6 +8,7 @@
 #include <QtTest>
 
 #include "ColorUtils.h"
+#include "miniz.h"
 #include "TestSupport.h"
 
 using namespace OmniView;
@@ -22,6 +23,31 @@ QImage horizontalGradient(int w, int h, bool leftToRight) {
     g.setColorAt(1, leftToRight ? Qt::white : Qt::black);
     p.fillRect(img.rect(), g);
     return img;
+}
+
+void appendBigEndian(QByteArray& out, quint32 v) {
+    for (int shift = 24; shift >= 0; shift -= 8) out.append(static_cast<char>((v >> shift) & 0xFF));
+}
+
+void appendPngChunk(QByteArray& out, const char* type, const QByteArray& data) {
+    appendBigEndian(out, static_cast<quint32>(data.size()));
+    const QByteArray body = QByteArray(type, 4) + data;
+    out.append(body);
+    appendBigEndian(out, static_cast<quint32>(mz_crc32(MZ_CRC32_INIT,
+        reinterpret_cast<const unsigned char*>(body.constData()), static_cast<size_t>(body.size()))));
+}
+
+// A PNG whose header claims w x h; enough for QImageReader::size().
+QByteArray pngHeaderOnly(quint32 w, quint32 h) {
+    QByteArray png("\x89PNG\r\n\x1a\n", 8);
+    QByteArray ihdr;
+    appendBigEndian(ihdr, w);
+    appendBigEndian(ihdr, h);
+    ihdr.append(QByteArray("\x08\x00\x00\x00\x00", 5)); // 8-bit greyscale
+    appendPngChunk(png, "IHDR", ihdr);
+    appendPngChunk(png, "IDAT", QByteArray("\x78\x9c", 2));
+    appendPngChunk(png, "IEND", QByteArray());
+    return png;
 }
 
 QImage noise(int w, int h, int seed) {
@@ -238,6 +264,41 @@ private slots:
         const QImage img = ColorUtils::loadImage(src);
         QCOMPARE(img.devicePixelRatio(), 1.0);
         QCOMPARE(img.size(), QSize(40, 30));
+    }
+
+    void hugeImageDecodedAtReducedSize() {
+        // Over MAX_IMAGE_PIXELS (e.g. a 108 MP phone photo), but JPEG decodes
+        // straight to a fraction of its size, so a thumbnail is affordable.
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("huge.jpg"));
+        {
+            QImage img(8200, 8200, QImage::Format_Grayscale8);
+            QVERIFY(!img.isNull());
+            img.fill(128);
+            QVERIFY(img.save(src, "JPEG", 50));
+        }
+        QSize original;
+        QString error;
+        const QImage thumb = ColorUtils::loadImage(src, QSize(256, 256), &original, &error);
+        QVERIFY2(!thumb.isNull(), qPrintable(error));
+        QCOMPARE(original, QSize(8200, 8200));
+        QVERIFY(thumb.width() <= 256 && thumb.height() <= 256);
+    }
+
+    void hugeImageWithoutReducedDecodeIsRejected() {
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("huge.png"));
+        QFile f(src);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(pngHeaderOnly(9000, 9000));
+        f.close();
+        QCOMPARE(QImageReader(src).size(), QSize(9000, 9000));
+        QString error;
+        QVERIFY(ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error).isNull());
+        QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
+        error.clear();
+        QVERIFY(ColorUtils::loadImage(src, QSize(), nullptr, &error).isNull());
+        QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
     }
 
     void undecodableSourceReportsError() {
