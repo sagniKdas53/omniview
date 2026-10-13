@@ -163,7 +163,10 @@ private slots:
         QImage old(10, 10, QImage::Format_RGB32);
         old.fill(Qt::black);
         QVERIFY(old.save(legacy, "JPEG"));
-        const QByteArray legacyBefore = [&]() { QFile l(legacy); l.open(QIODevice::ReadOnly); return l.readAll(); }();
+        QFile legacyFile(legacy);
+        QVERIFY(legacyFile.open(QIODevice::ReadOnly));
+        const QByteArray legacyBefore = legacyFile.readAll();
+        legacyFile.close();
 
         ThumbnailManager mgr(db.dbPath());
         QSignalSpy ready(&mgr, &ThumbnailManager::thumbnailReady);

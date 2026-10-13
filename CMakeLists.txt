@@ -112,7 +112,9 @@ function(omniview_add_test name source)
     add_executable(${name} ${source} tests/TestSupport.h)
     target_link_libraries(${name} PRIVATE omniview_core Qt${QT_VERSION_MAJOR}::Test)
     omniview_enable_warnings(${name})
-    add_test(NAME ${name} COMMAND ${name})
+    # Results also go to a file so CI can show them (Windows ctest output
+    # does not include QtTest's stdout).
+    add_test(NAME ${name} COMMAND ${name} -o -,txt -o ${name}-results.txt,txt)
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "${OMNIVIEW_TEST_ENV}" TIMEOUT 300)
 endfunction()
 

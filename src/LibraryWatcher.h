@@ -39,7 +39,10 @@ public:
     void setMaxDelay(int ms) { m_maxDelayMs = ms; }
     void setMaxWatches(int count) { m_maxWatches = count; }
 
-    QStringList watchedDirectories() const { return m_watcher.directories(); }
+    // The directories this watcher is responsible for. Tracked here rather
+    // than read from QFileSystemWatcher::directories(): backends differ on
+    // whether a deleted directory is still listed (macOS FSEvents keeps it).
+    QStringList watchedDirectories() const;
     // Directories that could not be watched (e.g. inotify limit reached) or
     // were left out because of maxWatches. Non-empty means live updates are
     // incomplete.
@@ -59,6 +62,7 @@ private:
     QElapsedTimer m_firstEvent;
     QString m_root;
     QStringList m_unwatched;
+    QSet<QString> m_watched;
     int m_debounceMs = 1200;
     int m_maxDelayMs = 10000;
     int m_maxWatches = 4096;

@@ -4,6 +4,9 @@
 #include <QDirIterator>
 #include <QFileInfo>
 
+#include <algorithm>
+#include <utility>
+
 namespace OmniView {
 
 LibraryWatcher::LibraryWatcher(QObject* parent)
@@ -52,6 +55,12 @@ QStringList LibraryWatcher::collectDirectories() const {
     return dirs;
 }
 
+QStringList LibraryWatcher::watchedDirectories() const {
+    QStringList dirs(m_watched.cbegin(), m_watched.cend());
+    dirs.sort();
+    return dirs;
+}
+
 void LibraryWatcher::refresh() {
     QStringList wanted = collectDirectories();
     m_unwatched.clear();
@@ -59,21 +68,35 @@ void LibraryWatcher::refresh() {
         m_unwatched = wanted.mid(m_maxWatches);
         wanted = wanted.mid(0, m_maxWatches);
     }
-
-    const QSet<QString> current(m_watcher.directories().cbegin(), m_watcher.directories().cend());
     const QSet<QString> target(wanted.cbegin(), wanted.cend());
 
     QStringList toRemove;
-    for (const QString& dir : current) {
+    for (const QString& dir : std::as_const(m_watched)) {
         if (!target.contains(dir)) toRemove.append(dir);
     }
-    QStringList toAdd;
-    for (const QString& dir : wanted) {
-        if (!current.contains(dir)) toAdd.append(dir);
+    if (!toRemove.isEmpty()) {
+        // A backend may refuse to remove a directory that no longer exists;
+        // it can't produce events any more, so it is dropped either way.
+        m_watcher.removePaths(toRemove);
+        for (const QString& dir : std::as_const(toRemove)) m_watched.remove(dir);
     }
-    if (!toRemove.isEmpty()) m_watcher.removePaths(toRemove);
+
+    QStringList toAdd;
+    for (const QString& dir : std::as_const(wanted)) {
+        if (!m_watched.contains(dir)) toAdd.append(dir);
+    }
     if (!toAdd.isEmpty()) {
-        m_unwatched += m_watcher.addPaths(toAdd);
+        QStringList failed = m_watcher.addPaths(toAdd);
+        // "Already watched" (a stale backend entry for a re-created path)
+        // is not a failure.
+        const QStringList backendDirs = m_watcher.directories();
+        failed.erase(std::remove_if(failed.begin(), failed.end(),
+                                    [&](const QString& d) { return backendDirs.contains(d); }),
+                     failed.end());
+        for (const QString& dir : std::as_const(toAdd)) {
+            if (!failed.contains(dir)) m_watched.insert(dir);
+        }
+        m_unwatched += failed;
     }
 }
 
