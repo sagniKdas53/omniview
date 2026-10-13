@@ -1,5 +1,7 @@
 #include "GalleryModel.h"
 
+#include <utility>
+
 namespace OmniView {
 
 GalleryModel::GalleryModel(QObject* parent)
@@ -9,7 +11,7 @@ GalleryModel::GalleryModel(QObject* parent)
 
 int GalleryModel::rowCount(const QModelIndex& parent) const {
     if (parent.isValid()) return 0;
-    return m_items.size();
+    return static_cast<int>(m_items.size());
 }
 
 QVariant GalleryModel::data(const QModelIndex& index, int role) const {
@@ -79,13 +81,13 @@ QHash<int, QByteArray> GalleryModel::roleNames() const {
     return roles;
 }
 
-void GalleryModel::setItems(const QVector<ImageRecord>& items) {
+void GalleryModel::setItems(QVector<ImageRecord> items) {
     beginResetModel();
-    m_items = items;
+    m_items = std::move(items);
     m_pathToRow.clear();
     m_pathToRow.reserve(m_items.size());
     for (int i = 0; i < m_items.size(); ++i) {
-        m_pathToRow.insert(m_items[i].path, i);
+        m_pathToRow.insert(m_items.at(i).path, i);
     }
     endResetModel();
 }
@@ -128,7 +130,8 @@ void GalleryModel::updateItemFeatures(const QString& path, const ImageFeatures& 
     emit dataChanged(idx, idx);
 }
 
-void GalleryModel::setItemFavorite(int row, bool fav) {
+void GalleryModel::setItemFavorite(const QString& path, bool fav) {
+    const int row = rowForPath(path);
     if (row < 0 || row >= m_items.size()) return;
     m_items[row].isFavorite = fav;
     const QModelIndex idx = index(row, 0);

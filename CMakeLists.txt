@@ -70,6 +70,9 @@ add_library(omniview_core STATIC
     src/ColorUtils.cpp      src/ColorUtils.h
     src/Scanner.cpp         src/Scanner.h
     src/ThumbnailWorker.cpp src/ThumbnailWorker.h
+    src/FileActions.cpp     src/FileActions.h
+    src/FilterState.cpp     src/FilterState.h
+    src/LibraryWatcher.cpp  src/LibraryWatcher.h
     src/GalleryModel.cpp    src/GalleryModel.h
     src/GalleryDelegate.cpp src/GalleryDelegate.h
     src/GalleryView.cpp     src/GalleryView.h
@@ -124,3 +127,4 @@ omniview_add_test(database_regression_tests tests/test_database_regressions.cpp)
 omniview_add_test(imaging_tests             tests/test_imaging.cpp)
 omniview_add_test(zip_scanner_tests         tests/test_zip_scanner.cpp)
 omniview_add_test(thumbnail_tests           tests/test_thumbnails.cpp)
+omniview_add_test(ui_tests                  tests/test_ui.cpp)

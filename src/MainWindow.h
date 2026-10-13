@@ -9,10 +9,12 @@
 #include <QSlider>
 #include <QComboBox>
 #include <QTimer>
-#include <QFileSystemWatcher>
 #include <QFrame>
+#include <QPointer>
 
 #include "Database.h"
+#include "FilterState.h"
+#include "LibraryWatcher.h"
 #include "Scanner.h"
 #include "ThumbnailWorker.h"
 #include "GalleryModel.h"
@@ -27,6 +29,14 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(const QString& initialDir = QString(), QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    Q_DISABLE_COPY_MOVE(MainWindow)
+
+    // For tests and scripting.
+    QString currentRootDir() const { return m_currentRootDir; }
+    const FilterState& filterState() const { return m_filter; }
+    bool isScanInProgress() const { return m_scanInProgress; }
+    void changeRootDir(const QString& dir);
 
 private slots:
     void onChangeFolderClicked();
@@ -43,15 +53,13 @@ private slots:
     void onFolderSearchChanged(const QString& text);
 
     void onScanProgress(int count);
-    void onScanFinished(int totalCount, const Stats& stats, const QString& error);
-
-    void onFsDirectoryChanged(const QString& path);
-    void onFsTimeout();
+    void onWatcherRescanRequested();
 
     void onThumbnailReady(const QString& sourcePath, const QString& thumbPath, const ImageFeatures& feat);
     void onSelectionCountChanged(int count, const QStringList& paths);
     void onOpenViewer(const ImageRecord& item, int row);
     void onFavoriteToggled(int row, const QString& path);
+    void toggleFavoriteForPath(const QString& path);
     void onFindSimilarRequested(const QString& dhash, const QString& filename);
     void onClearSimilarityClicked();
 
@@ -65,32 +73,28 @@ private:
     void updateAspectPillStyles();
 
     void startScan();
+    void onScanFinished(Scanner* scanner, int totalCount, const Stats& stats, const QString& error);
     void refreshGallery();
-    void refreshFolderList();
-    void updateFsWatchers();
+    // Returns true if the selected folder vanished and the filter was reset.
+    bool refreshFolderList();
+    void setSelectModeButtonStyle(int count);
 
     QString m_currentRootDir;
     Database m_db;
+    QString m_dbError;
     ThumbnailManager m_thumbMgr;
-    Scanner* m_scanner = nullptr;
+    QPointer<Scanner> m_scanner;
+    bool m_scanInProgress = false;
+    bool m_rescanPending = false;
+    FilterState m_filter;
 
     GalleryModel* m_model = nullptr;
     GalleryDelegate* m_delegate = nullptr;
     GalleryView* m_view = nullptr;
     ViewerWindow* m_viewerWindow = nullptr;
 
-    // Filter state
-    QString m_selectedSubfolder = QStringLiteral("__all__");
-    QString m_selectedColor = QStringLiteral("all");
-    QString m_selectedAspect = QStringLiteral("all");
-    QString m_searchTerm;
-    bool m_favoriteOnly = false;
-    QString m_sortBy = QStringLiteral("mtime_desc");
     bool m_darkMode = true;
     bool m_selectMode = false;
-    QString m_similarityTargetDHash;
-    QString m_similarityTargetFilename;
-    QVector<ImageRecord> m_currentItems;
 
     // UI elements
     QFrame* m_similarityBanner = nullptr;
@@ -121,8 +125,7 @@ private:
     QPushButton* m_btnCopyPaths = nullptr;
 
     // Watcher & Debounce
-    QFileSystemWatcher* m_fsWatcher = nullptr;
-    QTimer* m_fsTimer = nullptr;
+    LibraryWatcher* m_watcher = nullptr;
     QTimer* m_searchTimer = nullptr;
 };
 

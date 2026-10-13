@@ -9,40 +9,31 @@
 #include <QScrollBar>
 #include <QApplication>
 
+#include <utility>
+
 namespace OmniView {
 
 MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
     : QMainWindow(parent)
-    , m_currentRootDir(initialDir.isEmpty() ? Config::defaultRootDir() : initialDir)
+    , m_currentRootDir(QDir(initialDir.isEmpty() ? Config::defaultRootDir() : initialDir).absolutePath())
     , m_thumbMgr(m_db.dbPath())
 {
     Config::ensureDirectories();
-    m_db.initSchema();
+    if (!m_db.initSchema()) {
+        m_dbError = m_db.lastError().isEmpty() ? QStringLiteral("cannot open %1").arg(m_db.dbPath())
+                                               : m_db.lastError();
+    }
 
     setWindowTitle(Config::appTitle());
     resize(1380, 880);
 
     m_viewerWindow = new ViewerWindow(this);
-    connect(m_viewerWindow, &ViewerWindow::favoriteToggled, this, [this](int /*idx*/, const QString& path) {
-        bool newVal = false;
-        if (m_db.toggleFavorite(path, &newVal)) {
-            m_viewerWindow->setFavoriteState(path, newVal);
-            const int r = m_model->rowForPath(path);
-            if (r >= 0) {
-                m_model->setItemFavorite(r, newVal);
-            }
-            refreshFolderList();
-            if (m_favoriteOnly) refreshGallery();
-        }
-    });
+    connect(m_viewerWindow, &ViewerWindow::favoriteToggled, this,
+            [this](int /*idx*/, const QString& path) { toggleFavoriteForPath(path); });
 
-    // File System Watcher for live updates
-    m_fsWatcher = new QFileSystemWatcher(this);
-    connect(m_fsWatcher, &QFileSystemWatcher::directoryChanged, this, &MainWindow::onFsDirectoryChanged);
-    m_fsTimer = new QTimer(this);
-    m_fsTimer->setSingleShot(true);
-    m_fsTimer->setInterval(1200);
-    connect(m_fsTimer, &QTimer::timeout, this, &MainWindow::onFsTimeout);
+    // Live updates: recursive, diffed directory watching with debounced rescans.
+    m_watcher = new LibraryWatcher(this);
+    connect(m_watcher, &LibraryWatcher::rescanRequested, this, &MainWindow::onWatcherRescanRequested);
 
     // Search debounce timer
     m_searchTimer = new QTimer(this);
@@ -53,24 +44,6 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
     // Thumbnail generation signals
     connect(&m_thumbMgr, &ThumbnailManager::thumbnailReady, this, &MainWindow::onThumbnailReady);
 
-    // Ensure emoji and symbol font fallback chain is configured on MainWindow
-    QFont f = font();
-    QStringList families = f.families();
-    const QStringList fallbacks = {
-        QStringLiteral("Noto Sans"),
-        QStringLiteral("DejaVu Sans"),
-        QStringLiteral("Ubuntu"),
-        QStringLiteral("Noto Color Emoji"),
-        QStringLiteral("Symbola"),
-        QStringLiteral("Segoe UI Emoji"),
-        QStringLiteral("Apple Color Emoji")
-    };
-    for (const QString& fb : fallbacks) {
-        if (!families.contains(fb)) families.append(fb);
-    }
-    f.setFamilies(families);
-    setFont(f);
-
     setupUi();
     applyTheme();
     refreshFolderList();
@@ -79,9 +52,12 @@ MainWindow::MainWindow(const QString& initialDir, QWidget* parent)
 }
 
 MainWindow::~MainWindow() {
-    if (m_scanner && m_scanner->isRunning()) {
+    // Stop background work before members go away: queued thumbnails are
+    // dropped (not drained) and a running scan is cancelled; the Scanner child
+    // waits for its thread when it is deleted.
+    m_thumbMgr.cancelPending();
+    if (m_scanner) {
         m_scanner->cancel();
-        m_scanner->wait();
     }
 }
 
@@ -120,14 +96,11 @@ void MainWindow::setupUi() {
     connect(m_view, &GalleryView::selectionCountChanged, this, &MainWindow::onSelectionCountChanged);
     connect(m_view, &GalleryView::favoriteToggled, this, &MainWindow::onFavoriteToggled);
     connect(m_view, &GalleryView::filterToSubfolderRequested, this, [this](const QString& sub) {
-        m_selectedSubfolder = sub;
-        m_favoriteOnly = false;
-        for (int i = 0; i < m_folderList->count(); ++i) {
-            auto* it = m_folderList->item(i);
-            if (it->data(Qt::UserRole).toString() == sub) {
-                m_folderList->setCurrentItem(it);
-                break;
-            }
+        m_filter.selectSubfolder(sub);
+        if (!m_folderSearch->text().isEmpty()) {
+            m_folderSearch->clear(); // also refreshes the sidebar
+        } else {
+            refreshFolderList();
         }
         refreshGallery();
     });
@@ -189,10 +162,8 @@ QWidget* MainWindow::createTopBar() {
     m_folderPathEdit->setMinimumWidth(220);
     connect(m_folderPathEdit, &QLineEdit::returnPressed, this, [this]() {
         const QString text = m_folderPathEdit->text().trimmed();
-        if (QDir(text).exists() && text != m_currentRootDir) {
-            m_currentRootDir = text;
-            m_selectedSubfolder = QStringLiteral("__all__");
-            startScan();
+        if (!text.isEmpty() && QDir(text).exists()) {
+            changeRootDir(text);
         } else {
             m_folderPathEdit->setText(m_currentRootDir);
         }
@@ -419,7 +390,7 @@ void MainWindow::updateColorPillStyles() {
         const QString colorId = btn->property("colorId").toString();
         const QString hex = btn->property("hexColor").toString();
         const QString lbl = btn->property("label").toString();
-        const bool isSel = (m_selectedColor == colorId) || (colorId == QStringLiteral("all") && (m_selectedColor == QStringLiteral("all") || m_selectedColor.isEmpty()));
+        const bool isSel = (m_filter.colorName() == colorId);
 
         btn->setText(isSel ? QStringLiteral("• %1 •").arg(lbl) : lbl);
 
@@ -447,7 +418,7 @@ void MainWindow::updateColorPillStyles() {
 void MainWindow::updateAspectPillStyles() {
     for (auto* btn : m_aspectButtons) {
         const QString aspectId = btn->property("aspectId").toString();
-        const bool isSel = (m_selectedAspect == aspectId) || (aspectId == QStringLiteral("all") && (m_selectedAspect == QStringLiteral("all") || m_selectedAspect.isEmpty()));
+        const bool isSel = (m_filter.aspectType() == aspectId);
 
         if (isSel) {
             btn->setStyleSheet(QStringLiteral(
@@ -736,186 +707,181 @@ void MainWindow::applyTheme() {
     if (m_viewerWindow) m_viewerWindow->setDarkMode(m_darkMode);
 }
 
+void MainWindow::changeRootDir(const QString& dir) {
+    const QString absDir = QDir(dir).absolutePath();
+    if (absDir == m_currentRootDir) {
+        startScan();
+        return;
+    }
+    m_currentRootDir = absDir;
+    // Folder scope, favourites-only and similarity belong to the old root.
+    m_filter.resetForNewRoot();
+    m_thumbMgr.cancelPending();
+    // Show what is already indexed for the new root while it is rescanned.
+    refreshFolderList();
+    refreshGallery();
+    startScan();
+}
+
 void MainWindow::startScan() {
-    m_lblStats->setText(QStringLiteral("Scanning..."));
+    m_lblStats->setText(m_dbError.isEmpty() ? QStringLiteral("Scanning...")
+                                            : QStringLiteral("⚠ Database unavailable: %1").arg(m_dbError));
     if (m_folderPathEdit) {
         m_folderPathEdit->setText(m_currentRootDir);
     }
+    m_watcher->cancelPending();
+    m_rescanPending = false;
 
-    if (m_scanner && m_scanner->isRunning()) {
+    if (m_scanner) {
+        // Cancel without blocking the GUI thread; the old scanner deletes
+        // itself once its thread ends, and its late signals are ignored.
         m_scanner->cancel();
-        m_scanner->wait();
-        delete m_scanner;
         m_scanner = nullptr;
     }
 
-    m_scanner = new Scanner(m_currentRootDir, m_db.dbPath(), this);
-    connect(m_scanner, &Scanner::progress, this, &MainWindow::onScanProgress);
-    connect(m_scanner, &Scanner::scanFinished, this, &MainWindow::onScanFinished);
-    m_scanner->start();
+    auto* scanner = new Scanner(m_currentRootDir, m_db.dbPath(), this);
+    m_scanner = scanner;
+    m_scanInProgress = true;
+    connect(scanner, &Scanner::progress, this, [this, scanner](int count) {
+        if (scanner == m_scanner) onScanProgress(count);
+    });
+    connect(scanner, &Scanner::scanFinished, this,
+            [this, scanner](int count, const Stats& stats, const QString& error) {
+        onScanFinished(scanner, count, stats, error);
+    });
+    connect(scanner, &QThread::finished, scanner, &QObject::deleteLater);
+    scanner->start();
 }
 
 void MainWindow::onScanProgress(int count) {
     m_lblStats->setText(QStringLiteral("Found %1 images...").arg(count));
 }
 
-void MainWindow::onScanFinished(int totalCount, const Stats& stats, const QString& /*error*/) {
-    const double gb = static_cast<double>(stats.totalBytes) / (1024.0 * 1024.0 * 1024.0);
-    m_lblStats->setText(QStringLiteral("Total: %1 images (%2 GB)")
-        .arg(totalCount)
-        .arg(gb, 0, 'f', 1)
-    );
+void MainWindow::onScanFinished(Scanner* scanner, int totalCount, const Stats& stats, const QString& error) {
+    if (scanner != m_scanner) {
+        return; // a superseded (cancelled) scan
+    }
+    m_scanInProgress = false;
+
+    QString label;
+    if (!m_dbError.isEmpty()) {
+        label = QStringLiteral("⚠ Database unavailable: %1").arg(m_dbError);
+    } else if (!error.isEmpty()) {
+        label = QStringLiteral("⚠ %1").arg(error);
+    } else {
+        const double gb = static_cast<double>(stats.totalBytes) / (1024.0 * 1024.0 * 1024.0);
+        label = QStringLiteral("Total: %1 images (%2 GB)")
+            .arg(QString::number(totalCount), QString::number(gb, 'f', 1));
+    }
 
     refreshFolderList();
     refreshGallery();
 
-    m_thumbMgr.startBackgroundIndexing();
-    updateFsWatchers();
-}
-
-void MainWindow::updateFsWatchers() {
-    const QStringList watched = m_fsWatcher->directories();
-    if (!watched.isEmpty()) {
-        m_fsWatcher->removePaths(watched);
+    m_thumbMgr.startBackgroundIndexing(m_currentRootDir);
+    m_watcher->setRoot(m_currentRootDir);
+    if (!m_watcher->unwatchedDirectories().isEmpty()) {
+        label += QStringLiteral(" — live updates limited (%1 folders not watched)")
+                     .arg(m_watcher->unwatchedDirectories().size());
     }
+    m_lblStats->setText(label);
 
-    if (QDir(m_currentRootDir).exists()) {
-        QStringList paths = {m_currentRootDir};
-        QDir rootQDir(m_currentRootDir);
-        const auto subdirs = rootQDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const auto& fi : subdirs) {
-            if (!fi.fileName().startsWith('.')) {
-                paths.append(fi.absoluteFilePath());
-                if (paths.size() >= 200) break;
-            }
-        }
-        m_fsWatcher->addPaths(paths);
-    }
-}
-
-void MainWindow::onFsDirectoryChanged(const QString& /*path*/) {
-    m_fsTimer->start();
-}
-
-void MainWindow::onFsTimeout() {
-    if (!m_scanner || !m_scanner->isRunning()) {
+    if (m_rescanPending) {
+        // Changes arrived while scanning; the walk may already have passed them.
         startScan();
     }
 }
 
-void MainWindow::refreshFolderList() {
+void MainWindow::onWatcherRescanRequested() {
+    if (m_scanInProgress) {
+        m_rescanPending = true;
+        return;
+    }
+    startScan();
+}
+
+bool MainWindow::refreshFolderList() {
+    const QSignalBlocker blocker(m_folderList);
     m_folderList->clear();
     const auto subfolders = m_db.getSubfoldersWithCounts(m_currentRootDir);
     int totalAll = 0;
+    bool selectedStillExists = m_filter.scope() == FilterState::Scope::AllImages
+                               || m_filter.scope() == FilterState::Scope::Favorites;
     for (const auto& pair : subfolders) {
         totalAll += pair.second;
+        const auto scope = pair.first.isEmpty() ? FilterState::Scope::RootFolder : FilterState::Scope::Subfolder;
+        selectedStillExists = selectedStillExists || m_filter.isSelected(scope, pair.first);
     }
 
-    // 1. All images
-    auto* itemAll = new QListWidgetItem(QStringLiteral("🖼️ All Images (%1)").arg(totalAll), m_folderList);
-    itemAll->setData(Qt::UserRole, QStringLiteral("__all__"));
+    auto addItem = [this](const QString& label, FilterState::Scope scope, const QString& sub) {
+        auto* item = new QListWidgetItem(label, m_folderList);
+        item->setData(Qt::UserRole, static_cast<int>(scope));
+        item->setData(Qt::UserRole + 1, sub);
+        return item;
+    };
 
-    // 2. Favorites
+    addItem(QStringLiteral("🖼️ All Images (%1)").arg(totalAll), FilterState::Scope::AllImages, QString());
     const Stats stats = m_db.getStats(m_currentRootDir);
-    auto* itemFav = new QListWidgetItem(QStringLiteral("⭐ Favorites (%1)").arg(stats.favoritesCount), m_folderList);
-    itemFav->setData(Qt::UserRole, QStringLiteral("__fav__"));
+    addItem(QStringLiteral("⭐ Favorites (%1)").arg(stats.favoritesCount), FilterState::Scope::Favorites, QString());
 
-    // 3. Subfolders
     const QString filterText = m_folderSearch->text().trimmed().toLower();
     for (const auto& pair : subfolders) {
-        QString label;
-        if (pair.first.isEmpty()) {
-            label = QStringLiteral("📁 Root Folder (%1)").arg(pair.second);
-        } else {
-            label = QStringLiteral("📁 %1 (%2)").arg(pair.first).arg(pair.second);
-        }
-
+        const bool isRoot = pair.first.isEmpty();
+        const QString label = isRoot
+            ? QStringLiteral("📁 Root Folder (%1)").arg(pair.second)
+            : QStringLiteral("📁 %1 (%2)").arg(pair.first, QString::number(pair.second));
         if (!filterText.isEmpty() && !label.toLower().contains(filterText)) {
             continue;
         }
-
-        auto* item = new QListWidgetItem(label, m_folderList);
-        item->setData(Qt::UserRole, pair.first.isEmpty() ? QStringLiteral("__root__") : pair.first);
+        addItem(label, isRoot ? FilterState::Scope::RootFolder : FilterState::Scope::Subfolder, pair.first);
     }
 
-    // Preserve selection
+    bool reset = false;
+    if (!selectedStillExists) {
+        // The selected folder disappeared (deleted, renamed, new root): show
+        // everything rather than an empty gallery under a stale filter.
+        m_filter.selectAllImages();
+        reset = true;
+    }
+
+    m_folderList->setCurrentRow(-1);
     for (int i = 0; i < m_folderList->count(); ++i) {
         auto* it = m_folderList->item(i);
-        if (it->data(Qt::UserRole).toString() == m_selectedSubfolder) {
+        const auto scope = static_cast<FilterState::Scope>(it->data(Qt::UserRole).toInt());
+        if (m_filter.isSelected(scope, it->data(Qt::UserRole + 1).toString())) {
             m_folderList->setCurrentItem(it);
-            return;
+            break;
         }
     }
-    m_folderList->setCurrentRow(0);
+    return reset;
 }
 
 void MainWindow::refreshGallery() {
-    QueryFilter filter;
-    filter.rootDir = m_currentRootDir;
-    if (m_selectedSubfolder == QStringLiteral("__root__")) {
-        filter.folderScope = FolderScope::Root;
-    } else if (m_selectedSubfolder != QStringLiteral("__all__") && m_selectedSubfolder != QStringLiteral("__fav__")) {
-        filter.folderScope = FolderScope::Subfolder;
-        filter.subfolder = m_selectedSubfolder;
-    }
-    filter.colorName = m_selectedColor;
-    filter.aspectType = m_selectedAspect;
-    filter.searchTerm = m_searchTerm;
-    filter.favoriteOnly = m_favoriteOnly;
-    filter.sortBy = m_sortBy;
+    QVector<ImageRecord> items = m_db.queryImages(m_filter.toQueryFilter(m_currentRootDir));
 
-    m_currentItems = m_db.queryImages(filter);
-
-    if (!m_similarityTargetDHash.isEmpty()) {
-        QVector<QPair<int, ImageRecord>> scored;
-        for (const auto& rec : m_currentItems) {
-            if (rec.dhash.isEmpty()) {
-                continue;
-            }
-            int dist = ColorUtils::hammingDistance(m_similarityTargetDHash, rec.dhash);
-            if (dist <= 18) {
-                scored.append(qMakePair(dist, rec));
-            }
-        }
-        std::sort(scored.begin(), scored.end(), [](const QPair<int, ImageRecord>& a, const QPair<int, ImageRecord>& b) {
-            return a.first < b.first;
-        });
-
-        m_currentItems.clear();
-        for (const auto& pair : scored) {
-            m_currentItems.append(pair.second);
-        }
-
+    if (m_filter.hasSimilarityTarget()) {
+        items = FilterState::rankBySimilarity(items, m_filter.similarityHash());
         if (m_lblSimilarity) {
             m_lblSimilarity->setText(QStringLiteral("✨ Showing %1 visually similar images to '%2'")
-                .arg(m_currentItems.size())
-                .arg(m_similarityTargetFilename));
+                .arg(QString::number(items.size()), m_filter.similarityName()));
         }
         if (m_similarityBanner) {
             m_similarityBanner->setVisible(true);
         }
-    } else {
-        if (m_similarityBanner) {
-            m_similarityBanner->setVisible(false);
-        }
+    } else if (m_similarityBanner) {
+        m_similarityBanner->setVisible(false);
     }
 
-    m_model->setItems(m_currentItems);
+    m_model->setItems(std::move(items));
     m_view->viewport()->update();
 }
 
 void MainWindow::onFindSimilarRequested(const QString& dhash, const QString& filename) {
-    m_similarityTargetDHash = dhash;
-    m_similarityTargetFilename = filename;
+    m_filter.setSimilarityTarget(dhash, filename);
     refreshGallery();
 }
 
 void MainWindow::onClearSimilarityClicked() {
-    m_similarityTargetDHash.clear();
-    m_similarityTargetFilename.clear();
-    if (m_similarityBanner) {
-        m_similarityBanner->setVisible(false);
-    }
+    m_filter.clearSimilarityTarget();
     refreshGallery();
 }
 
@@ -928,10 +894,8 @@ void MainWindow::onChangeFolderClicked() {
         this, QStringLiteral("Select Image Directory"), m_currentRootDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
-    if (!dir.isEmpty() && dir != m_currentRootDir) {
-        m_currentRootDir = dir;
-        m_selectedSubfolder = QStringLiteral("__all__");
-        startScan();
+    if (!dir.isEmpty()) {
+        changeRootDir(dir);
     }
 }
 
@@ -940,41 +904,33 @@ void MainWindow::onRescanClicked() {
 }
 
 void MainWindow::onSearchTextChanged(const QString& text) {
-    m_searchTerm = text;
+    m_filter.setSearchTerm(text);
     m_searchTimer->start();
 }
 
 void MainWindow::onColorPillClicked(const QString& colorId) {
-    if (m_selectedColor == colorId || colorId == QStringLiteral("all")) {
-        m_selectedColor = QStringLiteral("all");
-    } else {
-        m_selectedColor = colorId;
-    }
+    m_filter.toggleColor(colorId);
     updateColorPillStyles();
     refreshGallery();
 }
 
 void MainWindow::onAspectPillClicked(const QString& aspectId) {
-    m_selectedAspect = aspectId;
+    m_filter.setAspectType(aspectId);
     updateAspectPillStyles();
     refreshGallery();
 }
 
 void MainWindow::onSortChanged(int index) {
-    m_sortBy = m_sortCombo->itemData(index).toString();
+    m_filter.setSortBy(m_sortCombo->itemData(index).toString());
     refreshGallery();
 }
 
 void MainWindow::onCardSizeChanged(int value) {
+    // The delegate announces the new size hint; no reset (keeps the selection).
     m_delegate->setCardSize(value);
-    m_view->setSpacing(8);
-    m_view->reset(); // Forces relayout with new size hints
 }
 
-void MainWindow::onSelectModeToggled() {
-    m_selectMode = m_btnSelectMode->isChecked();
-    m_view->setSelectMode(m_selectMode);
-    const int count = m_view->getSelectedPaths().size();
+void MainWindow::setSelectModeButtonStyle(int count) {
     if (m_selectMode) {
         m_btnSelectMode->setText(QStringLiteral("☑ Selecting (%1)").arg(count));
         m_btnSelectMode->setStyleSheet(QStringLiteral(
@@ -987,14 +943,18 @@ void MainWindow::onSelectModeToggled() {
             "    padding: 5px 12px;"
             "}"
         ));
-        m_batchBar->show();
     } else {
         m_btnSelectMode->setText(QStringLiteral("☑ Batch Select"));
         m_btnSelectMode->setStyleSheet(QString());
-        if (count == 0) {
-            m_batchBar->hide();
-        }
     }
+}
+
+void MainWindow::onSelectModeToggled() {
+    m_selectMode = m_btnSelectMode->isChecked();
+    m_view->setSelectMode(m_selectMode);
+    const int count = static_cast<int>(m_view->getSelectedPaths().size());
+    setSelectModeButtonStyle(count);
+    m_batchBar->setVisible(m_selectMode || count > 0);
 }
 
 void MainWindow::onThemeToggled() {
@@ -1004,80 +964,64 @@ void MainWindow::onThemeToggled() {
 
 void MainWindow::onFolderItemClicked(QListWidgetItem* item) {
     if (!item) return;
-    const QString sub = item->data(Qt::UserRole).toString();
-    m_selectedSubfolder = sub;
-    m_favoriteOnly = (sub == QStringLiteral("__fav__"));
+    const auto scope = static_cast<FilterState::Scope>(item->data(Qt::UserRole).toInt());
+    const QString sub = item->data(Qt::UserRole + 1).toString();
+    switch (scope) {
+    case FilterState::Scope::AllImages: m_filter.selectAllImages(); break;
+    case FilterState::Scope::Favorites: m_filter.selectFavorites(); break;
+    case FilterState::Scope::RootFolder: m_filter.selectRootFolder(); break;
+    case FilterState::Scope::Subfolder: m_filter.selectSubfolder(sub); break;
+    }
     refreshGallery();
 }
 
 void MainWindow::onFolderSearchChanged(const QString& /*text*/) {
-    refreshFolderList();
-}
-
-void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
-    if (count > 0) {
-        m_lblBatchCount->setText(QStringLiteral("📦 %1 item(s) selected").arg(count));
-        m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 13px;"));
-        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach (%1)").arg(count));
-        m_btnBatchDrag->setFilePaths(paths);
-        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (%1)").arg(count));
-        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths (%1)").arg(count));
-        if (m_selectMode) {
-            m_btnSelectMode->setText(QStringLiteral("☑ Selecting (%1)").arg(count));
-            m_btnSelectMode->setStyleSheet(QStringLiteral(
-                "QPushButton {"
-                "    background-color: #12263e;"
-                "    color: #00d2ff;"
-                "    border: 1.5px solid #00d2ff;"
-                "    font-weight: bold;"
-                "    border-radius: 5px;"
-                "    padding: 5px 12px;"
-                "}"
-            ));
-        }
-        m_batchBar->show();
-    } else {
-        m_lblBatchCount->setText(QStringLiteral("📦 0 item(s) selected"));
-        m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 13px;"));
-        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach"));
-        m_btnBatchDrag->setFilePaths(QStringList());
-        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (Attach)"));
-        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths"));
-        if (m_selectMode) {
-            m_btnSelectMode->setText(QStringLiteral("☑ Selecting (0)"));
-            m_btnSelectMode->setStyleSheet(QStringLiteral(
-                "QPushButton {"
-                "    background-color: #12263e;"
-                "    color: #00d2ff;"
-                "    border: 1.5px solid #00d2ff;"
-                "    font-weight: bold;"
-                "    border-radius: 5px;"
-                "    padding: 5px 12px;"
-                "}"
-            ));
-            m_batchBar->show();
-        } else {
-            m_btnSelectMode->setText(QStringLiteral("☑ Batch Select"));
-            m_btnSelectMode->setStyleSheet(QString());
-            m_batchBar->hide();
-        }
+    if (refreshFolderList()) {
+        refreshGallery();
     }
 }
 
-void MainWindow::onOpenViewer(const ImageRecord& /*item*/, int row) {
-    m_viewerWindow->showImage(m_currentItems, row);
+void MainWindow::onSelectionCountChanged(int count, const QStringList& paths) {
+    m_lblBatchCount->setText(QStringLiteral("📦 %1 item(s) selected").arg(count));
+    m_lblBatchCount->setStyleSheet(QStringLiteral("color: #38bdf8; font-weight: bold; font-size: 13px;"));
+    m_btnBatchDrag->setFilePaths(paths);
+    if (count > 0) {
+        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach (%1)").arg(count));
+        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (%1)").arg(count));
+        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths (%1)").arg(count));
+    } else {
+        m_btnBatchDrag->setText(QStringLiteral("📤 Drag to Attach"));
+        if (m_btnCopyFiles) m_btnCopyFiles->setText(QStringLiteral("📁 Copy Files (Attach)"));
+        if (m_btnCopyPaths) m_btnCopyPaths->setText(QStringLiteral("📋 Copy Paths"));
+    }
+    setSelectModeButtonStyle(count);
+    m_batchBar->setVisible(m_selectMode || count > 0);
 }
 
-void MainWindow::onFavoriteToggled(int row, const QString& path) {
+void MainWindow::onOpenViewer(const ImageRecord& item, int /*row*/) {
+    // Resolve by path: the row may be stale (e.g. chosen from a context menu
+    // while a refresh reordered the gallery). The viewer gets the model's
+    // up-to-date records (favourite state included).
+    const int row = m_model->rowForPath(item.path);
+    if (row < 0) return;
+    m_viewerWindow->showImage(m_model->items(), row);
+}
+
+void MainWindow::onFavoriteToggled(int /*row*/, const QString& path) {
+    toggleFavoriteForPath(path);
+}
+
+void MainWindow::toggleFavoriteForPath(const QString& path) {
     bool newVal = false;
-    if (m_db.toggleFavorite(path, &newVal)) {
-        m_model->setItemFavorite(row, newVal);
-        m_viewerWindow->setFavoriteState(path, newVal);
-        refreshFolderList();
-        // If viewing favorites, refresh list
-        if (m_favoriteOnly) {
-            refreshGallery();
-        }
+    if (!m_db.toggleFavorite(path, &newVal)) {
+        m_lblStats->setText(QStringLiteral("⚠ Could not update favourite: %1").arg(m_db.lastError()));
+        return;
+    }
+    m_model->setItemFavorite(path, newVal);
+    m_viewerWindow->setFavoriteState(path, newVal);
+    refreshFolderList();
+    if (m_filter.scope() == FilterState::Scope::Favorites) {
+        refreshGallery();
     }
 }
 

@@ -112,9 +112,9 @@ private slots:
         QVERIFY(db.initSchema());
 
         QVector<ImageRecord> entries = {
-            {QStringLiteral("/media/img1.jpg"), QStringLiteral("img1.jpg"), QStringLiteral("folder_a"), 1024 * 100, 1700000000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false},
-            {QStringLiteral("/media/img2.png"), QStringLiteral("img2.png"), QStringLiteral("folder_b"), 1024 * 200, 1700001000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false},
-            {QStringLiteral("/media/img3.webp"), QStringLiteral("img3.webp"), QStringLiteral("folder_a"), 1024 * 300, 1700002000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false}
+            {QStringLiteral("/media/img1.jpg"), QStringLiteral("img1.jpg"), QStringLiteral("folder_a"), 1024LL * 100, 1700000000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false},
+            {QStringLiteral("/media/img2.png"), QStringLiteral("img2.png"), QStringLiteral("folder_b"), 1024LL * 200, 1700001000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false},
+            {QStringLiteral("/media/img3.webp"), QStringLiteral("img3.webp"), QStringLiteral("folder_a"), 1024LL * 300, 1700002000, 0, 0, QStringLiteral("square"), QString(), 0, 0, 0, QString(), QString(), false, false}
         };
 
         QVERIFY(db.batchSyncFiles(entries));
@@ -437,7 +437,7 @@ private slots:
 
     void testDecompressionBombCap() {
         // Entries with size > 128MB should be rejected
-        QVERIFY(ZipUtils::MAX_UNCOMPRESSED_ENTRY_SIZE == 128 * 1024 * 1024);
+        QVERIFY(ZipUtils::MAX_UNCOMPRESSED_ENTRY_SIZE == 128LL * 1024 * 1024);
         QTemporaryDir tmpDir;
         const QString emptyZip = tmpDir.filePath(QStringLiteral("empty.zip"));
         // Reading safe/unsafe entries
@@ -565,7 +565,7 @@ private slots:
 
         ViewerWindow viewer;
         QVector<ImageRecord> items = {
-            {imgPath, QStringLiteral("highres.png"), QStringLiteral(""), 1024 * 1024, 1000.0, 3541, 2508, QStringLiteral("landscape"), QString(), 0, 0, 0, QString(), QString(), false, false}
+            {imgPath, QStringLiteral("highres.png"), QStringLiteral(""), 1024LL * 1024, 1000.0, 3541, 2508, QStringLiteral("landscape"), QString(), 0, 0, 0, QString(), QString(), false, false}
         };
 
         viewer.showImage(items, 0);

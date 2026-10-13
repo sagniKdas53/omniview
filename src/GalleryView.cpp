@@ -1,24 +1,72 @@
 #include "GalleryView.h"
+#include "ColorUtils.h"
+#include "FileActions.h"
 #include "GalleryModel.h"
 #include "GalleryDelegate.h"
-#include "ZipUtils.h"
 
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QContextMenuEvent>
 #include <QDrag>
 #include <QMimeData>
-#include <QUrl>
 #include <QClipboard>
 #include <QApplication>
 #include <QMenu>
-#include <QProcess>
-#include <QFileInfo>
-#include <QPainter>
-#include <QPainterPath>
-#include <QDesktopServices>
+#include <QSet>
 
 namespace OmniView {
+
+namespace {
+
+QString menuStyleSheet(bool dark) {
+    return QStringLiteral(
+        "QMenu {"
+        "    background-color: %1;"
+        "    color: %2;"
+        "    border: 1px solid %3;"
+        "    border-radius: 6px;"
+        "    padding: 4px;"
+        "}"
+        "QMenu::item {"
+        "    padding: 6px 20px 6px 12px;"
+        "    border-radius: 4px;"
+        "}"
+        "QMenu::item:selected {"
+        "    background-color: #4f46e5;"
+        "    color: #ffffff;"
+        "}"
+        "QMenu::separator {"
+        "    height: 1px;"
+        "    background-color: %4;"
+        "    margin: 4px 8px;"
+        "}"
+    ).arg(dark ? QStringLiteral("#1e2230") : QStringLiteral("#ffffff"),
+          dark ? QStringLiteral("#e2e8f0") : QStringLiteral("#0f172a"),
+          dark ? QStringLiteral("#334155") : QStringLiteral("#cbd5e1"),
+          dark ? QStringLiteral("#334155") : QStringLiteral("#e2e8f0"));
+}
+
+QPointF localPosOf(const QMouseEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return e->position();
+#else
+    return e->localPos();
+#endif
+}
+
+QPointF globalPosOf(const QMouseEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return e->globalPosition();
+#else
+    return e->screenPos();
+#endif
+}
+
+bool hasNoModifiers(Qt::KeyboardModifiers mods) {
+    return (mods & ~Qt::KeypadModifier) == Qt::NoModifier;
+}
+
+} // namespace
 
 GalleryView::GalleryView(ThumbnailManager* thumbMgr, QWidget* parent)
     : QListView(parent)
@@ -33,6 +81,55 @@ GalleryView::GalleryView(ThumbnailManager* thumbMgr, QWidget* parent)
     setVerticalScrollMode(QListView::ScrollPerPixel);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setSelectionMode(QListView::ExtendedSelection);
+}
+
+void GalleryView::setModel(QAbstractItemModel* newModel) {
+    if (model()) {
+        disconnect(model(), nullptr, this, nullptr);
+    }
+    QListView::setModel(newModel);
+    if (newModel) {
+        // A reset (every gallery refresh) clears the selection without any
+        // selectionChanged signal. Carry the selection over by path and tell
+        // listeners (batch bar, drag button) what is selected now.
+        connect(newModel, &QAbstractItemModel::modelAboutToBeReset, this, &GalleryView::rememberSelection);
+        connect(newModel, &QAbstractItemModel::modelReset, this, &GalleryView::restoreSelection);
+    }
+    emitSelectionCount();
+}
+
+const GalleryModel* GalleryView::galleryModel() const {
+    return qobject_cast<const GalleryModel*>(model());
+}
+
+void GalleryView::rememberSelection() {
+    m_selectionBeforeReset = getSelectedPaths();
+    resetPressState();
+}
+
+void GalleryView::restoreSelection() {
+    const QStringList paths = m_selectionBeforeReset;
+    m_selectionBeforeReset.clear();
+    const GalleryModel* gModel = galleryModel();
+    if (gModel && selectionModel() && !paths.isEmpty()) {
+        QItemSelection restored;
+        for (const QString& p : paths) {
+            const int row = gModel->rowForPath(p);
+            if (row >= 0) {
+                const QModelIndex idx = gModel->index(row, 0);
+                restored.select(idx, idx);
+            }
+        }
+        const QSignalBlocker blocker(selectionModel());
+        selectionModel()->select(restored, QItemSelectionModel::ClearAndSelect);
+        viewport()->update();
+    }
+    emitSelectionCount();
+}
+
+void GalleryView::emitSelectionCount() {
+    const QStringList paths = getSelectedPaths();
+    emit selectionCountChanged(static_cast<int>(paths.size()), paths);
 }
 
 void GalleryView::setSelectMode(bool enabled) {
@@ -59,9 +156,12 @@ void GalleryView::setDarkMode(bool dark) {
 
 QVector<int> GalleryView::getSelectedRows() const {
     QVector<int> rows;
+    if (!selectionModel()) return rows;
+    // Single-column model: every selected index is a distinct row.
     const auto sel = selectionModel()->selectedIndexes();
+    rows.reserve(sel.size());
     for (const auto& idx : sel) {
-        if (idx.isValid() && !rows.contains(idx.row())) {
+        if (idx.isValid() && idx.column() == 0) {
             rows.append(idx.row());
         }
     }
@@ -71,7 +171,7 @@ QVector<int> GalleryView::getSelectedRows() const {
 
 QStringList GalleryView::getSelectedPaths() const {
     QStringList paths;
-    const auto* gModel = qobject_cast<const GalleryModel*>(model());
+    const GalleryModel* gModel = galleryModel();
     if (!gModel) return paths;
 
     for (int r : getSelectedRows()) {
@@ -101,78 +201,84 @@ void GalleryView::clearAllSelection() {
 void GalleryView::invertSelection() {
     if (!model() || !selectionModel()) return;
     const int count = model()->rowCount();
-    for (int r = 0; r < count; ++r) {
-        const QModelIndex idx = model()->index(r, 0);
-        selectionModel()->select(idx, QItemSelectionModel::Toggle);
-    }
+    if (count == 0) return;
+    // One Toggle over the whole range: a single selectionChanged instead of
+    // one per row.
+    const QItemSelection all(model()->index(0, 0), model()->index(count - 1, 0));
+    selectionModel()->select(all, QItemSelectionModel::Toggle);
 }
 
 void GalleryView::copyImageBitmap(const QString& path) {
-    QImage img;
-    QString zipPath, innerPath;
-    if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
-        const QByteArray bytes = ZipUtils::readZipEntryBytes(zipPath, innerPath);
-        img = QImage::fromData(bytes);
-    } else {
-        img = QImage(path);
-    }
+    const QImage img = ColorUtils::loadImage(path);
     if (!img.isNull()) {
         QApplication::clipboard()->setImage(img);
     }
 }
 
-void GalleryView::copySelectedImage() {
-    const QStringList paths = getSelectedPaths();
-    if (!paths.isEmpty()) {
-        copyImageBitmap(paths.first());
-    } else {
-        const QModelIndex idx = currentIndex();
-        if (idx.isValid()) {
-            const auto* gModel = qobject_cast<const GalleryModel*>(model());
-            if (gModel) {
-                if (const auto* it = gModel->getItem(idx.row())) {
-                    copyImageBitmap(it->path);
-                }
-            }
-        }
-    }
-}
-
 void GalleryView::selectionChanged(const QItemSelection& selected, const QItemSelection& deselected) {
     QListView::selectionChanged(selected, deselected);
-    const QStringList paths = getSelectedPaths();
-    emit selectionCountChanged(paths.size(), paths);
+    emitSelectionCount();
+}
+
+void GalleryView::resetPressState() {
+    m_dragStartPos = QPoint();
+    m_pressActive = false;
+    m_pressConsumed = false;
+    m_pressAdditive = false;
+    m_pressIndex = QPersistentModelIndex();
+    m_pendingToggleOnRelease = QPersistentModelIndex();
+    m_pendingSingleSelectOnRelease = QPersistentModelIndex();
 }
 
 void GalleryView::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton) {
-        m_dragStartPos = event->pos();
-        const QModelIndex idx = indexAt(event->pos());
+    const QModelIndex idx = indexAt(event->pos());
 
-        if (m_selectMode) {
-            if (idx.isValid() && selectionModel()) {
-                const bool isAlreadySelected = selectionModel()->isSelected(idx);
-                if (!isAlreadySelected) {
-                    selectionModel()->select(idx, QItemSelectionModel::Select);
-                    selectionModel()->setCurrentIndex(idx, QItemSelectionModel::NoUpdate);
-                    m_pendingToggleOnRelease = QPersistentModelIndex();
-                } else {
-                    m_pendingToggleOnRelease = QPersistentModelIndex(idx);
-                }
-                viewport()->update();
-                return;
+    if (event->button() == Qt::RightButton && m_selectMode && idx.isValid() && selectionModel()) {
+        // Keep the batch intact: the context menu acts on the clicked card.
+        selectionModel()->setCurrentIndex(idx, QItemSelectionModel::NoUpdate);
+        return;
+    }
+
+    if (event->button() != Qt::LeftButton) {
+        QListView::mousePressEvent(event);
+        return;
+    }
+
+    resetPressState();
+    m_dragStartPos = event->pos();
+    m_pressActive = true;
+    m_pressIndex = QPersistentModelIndex(idx);
+
+    if (m_selectMode) {
+        if (idx.isValid() && selectionModel()) {
+            if (!selectionModel()->isSelected(idx)) {
+                selectionModel()->select(idx, QItemSelectionModel::Select);
+                selectionModel()->setCurrentIndex(idx, QItemSelectionModel::NoUpdate);
             } else {
-                m_pendingToggleOnRelease = QPersistentModelIndex();
+                m_pendingToggleOnRelease = QPersistentModelIndex(idx);
             }
-        } else {
-            if (idx.isValid() && !(event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
-                const QVector<int> selRows = getSelectedRows();
-                if (selRows.size() > 1 && selRows.contains(idx.row())) {
-                    m_pendingSingleSelectOnRelease = QPersistentModelIndex(idx);
-                    return;
-                }
-            }
-            m_pendingSingleSelectOnRelease = QPersistentModelIndex();
+            m_pressConsumed = true;
+            viewport()->update();
+            return;
+        }
+        // Empty space in batch mode: rubber-band *adds* to the batch instead
+        // of replacing it (a stray click between cards must not wipe it).
+        m_pressAdditive = true;
+        QMouseEvent additive(event->type(), localPosOf(event), globalPosOf(event),
+                             event->button(), event->buttons(),
+                             event->modifiers() | Qt::ControlModifier);
+        QListView::mousePressEvent(&additive);
+        return;
+    }
+
+    if (idx.isValid() && !(event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
+        const QVector<int> selRows = getSelectedRows();
+        if (selRows.size() > 1 && selRows.contains(idx.row())) {
+            // Pressing inside a multi-selection: keep it (for dragging) and
+            // collapse to this card only on a plain click release.
+            m_pendingSingleSelectOnRelease = QPersistentModelIndex(idx);
+            m_pressConsumed = true;
+            return;
         }
     }
     QListView::mousePressEvent(event);
@@ -183,44 +289,72 @@ void GalleryView::mouseMoveEvent(QMouseEvent* event) {
     viewport()->setCursor(hoverIdx.isValid() ? Qt::PointingHandCursor : Qt::ArrowCursor);
 
     if (!(event->buttons() & Qt::LeftButton)) {
-        m_dragStartPos = QPoint();
+        if (m_pressActive) resetPressState();
         if (state() != QAbstractItemView::NoState) {
             setState(QAbstractItemView::NoState);
         }
-    } else if (!m_dragStartPos.isNull()) {
+        QListView::mouseMoveEvent(event);
+        return;
+    }
+
+    if (m_pressActive && m_pressIndex.isValid()) {
         const int dist = (event->pos() - m_dragStartPos).manhattanLength();
         if (dist >= QApplication::startDragDistance()) {
-            const QModelIndex idx = indexAt(m_dragStartPos);
-            if (idx.isValid()) {
-                m_pendingToggleOnRelease = QPersistentModelIndex();
-                m_pendingSingleSelectOnRelease = QPersistentModelIndex();
-                setState(QAbstractItemView::NoState);
-                QMouseEvent fakeRelease(QEvent::MouseButtonRelease, m_dragStartPos, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            const QModelIndex pressed = m_pressIndex;
+            const bool consumed = m_pressConsumed;
+            const QPoint start = m_dragStartPos;
+            resetPressState();
+            setState(QAbstractItemView::NoState);
+            if (!consumed) {
+                // Let the base class finish its own press handling first.
+                QMouseEvent fakeRelease(QEvent::MouseButtonRelease, QPointF(start),
+                                        QPointF(viewport()->mapToGlobal(start)),
+                                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
                 QListView::mouseReleaseEvent(&fakeRelease);
-                startDragForIndex(idx);
-                m_dragStartPos = QPoint();
-                setState(QAbstractItemView::NoState);
-                return;
             }
+            startDragForIndex(pressed);
+            setState(QAbstractItemView::NoState);
+            return;
         }
+        if (m_pressConsumed) {
+            // We own this press: small movements before the drag threshold
+            // must not start a rubber band that replaces the selection.
+            return;
+        }
+    } else if (m_pressActive && m_pressConsumed) {
+        return;
     }
     QListView::mouseMoveEvent(event);
 }
 
 void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        const bool consumed = m_pressConsumed;
+        const bool additive = m_pressAdditive;
         if (m_pendingToggleOnRelease.isValid() && selectionModel()) {
             selectionModel()->select(m_pendingToggleOnRelease, QItemSelectionModel::Deselect);
             selectionModel()->setCurrentIndex(m_pendingToggleOnRelease, QItemSelectionModel::NoUpdate);
-            m_pendingToggleOnRelease = QPersistentModelIndex();
             viewport()->update();
         } else if (m_pendingSingleSelectOnRelease.isValid() && selectionModel()) {
             selectionModel()->select(m_pendingSingleSelectOnRelease, QItemSelectionModel::ClearAndSelect);
             selectionModel()->setCurrentIndex(m_pendingSingleSelectOnRelease, QItemSelectionModel::NoUpdate);
-            m_pendingSingleSelectOnRelease = QPersistentModelIndex();
             viewport()->update();
         }
-        m_dragStartPos = QPoint();
+        resetPressState();
+        if (consumed) {
+            setState(QAbstractItemView::NoState);
+            return;
+        }
+        if (additive) {
+            QMouseEvent additiveRelease(event->type(), localPosOf(event), globalPosOf(event),
+                                        event->button(), event->buttons(),
+                                        event->modifiers() | Qt::ControlModifier);
+            QListView::mouseReleaseEvent(&additiveRelease);
+            setState(QAbstractItemView::NoState);
+            return;
+        }
+    } else if (event->button() == Qt::RightButton && m_selectMode) {
+        return; // the press was not forwarded either
     }
     QListView::mouseReleaseEvent(event);
     if (QApplication::mouseButtons() == Qt::NoButton) {
@@ -237,7 +371,7 @@ void GalleryView::enterEvent(QEvent* event) {
 #endif
     QListView::enterEvent(event);
     if (QApplication::mouseButtons() == Qt::NoButton) {
-        m_dragStartPos = QPoint();
+        resetPressState();
         if (state() != QAbstractItemView::NoState) {
             setState(QAbstractItemView::NoState);
         }
@@ -247,7 +381,7 @@ void GalleryView::enterEvent(QEvent* event) {
 void GalleryView::leaveEvent(QEvent* event) {
     QListView::leaveEvent(event);
     if (QApplication::mouseButtons() == Qt::NoButton) {
-        m_dragStartPos = QPoint();
+        resetPressState();
         if (state() != QAbstractItemView::NoState) {
             setState(QAbstractItemView::NoState);
         }
@@ -255,93 +389,32 @@ void GalleryView::leaveEvent(QEvent* event) {
 }
 
 void GalleryView::startDragFiles(const QStringList& paths) {
-    QStringList validPaths;
-    for (const QString& p : paths) {
-        if (ZipUtils::isZipPath(p)) {
-            const QString extracted = ZipUtils::ensureExtracted(p);
-            if (!extracted.isEmpty() && QFile::exists(extracted)) {
-                validPaths.append(extracted);
-            }
-        } else if (QFile::exists(p)) {
-            validPaths.append(p);
-        }
-    }
-    if (validPaths.isEmpty()) return;
+    const QStringList localFiles = FileActions::resolveLocalFiles(paths);
+    if (localFiles.isEmpty()) return;
 
     auto* drag = new QDrag(this);
-    auto* mimeData = new QMimeData();
+    drag->setMimeData(FileActions::createFileMimeData(localFiles));
 
-    // 1. File URLs for external applications (Discord, Slack, Chrome, Dolphin, Nautilus)
-    QList<QUrl> urls;
-    for (const QString& p : validPaths) {
-        urls.append(QUrl::fromLocalFile(p));
-    }
-    mimeData->setUrls(urls);
-
-    // 2. Plain text paths
-    mimeData->setText(validPaths.join(QStringLiteral("\n")));
-
-    // 3. GNOME / KDE file manager copy format
-    QStringList urlStrings;
-    for (const QUrl& u : urls) {
-        urlStrings.append(u.toString());
-    }
-    const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
-    mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
-
-    // 4. Create drag thumbnail badge
-    QPixmap thumbPix;
-    if (m_thumbMgr) {
-        thumbPix = m_thumbMgr->getCachedPixmap(validPaths.first());
-    }
+    // Badge from the thumbnail cache (keyed by the gallery path, not the
+    // extracted file); fall back to a reduced decode, never a full one.
+    QPixmap thumbPix = m_thumbMgr ? m_thumbMgr->getCachedPixmap(paths.first()) : QPixmap();
     if (thumbPix.isNull()) {
-        thumbPix.load(validPaths.first());
-    }
-
-    const int badgeMax = 120;
-    if (!thumbPix.isNull()) {
-        const QPixmap scaled = thumbPix.scaled(badgeMax, badgeMax, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        QPixmap badge(scaled.width() + 12, scaled.height() + 12);
-        badge.fill(Qt::transparent);
-
-        QPainter p(&badge);
-        p.setRenderHint(QPainter::Antialiasing, true);
-
-        QPainterPath shape;
-        shape.addRoundedRect(QRectF(1, 1, scaled.width() + 10, scaled.height() + 10), 8, 8);
-        p.fillPath(shape, QColor(20, 24, 38, 230));
-        p.setPen(QPen(QColor(99, 102, 241), 2));
-        p.drawPath(shape);
-        p.drawPixmap(6, 6, scaled);
-
-        if (validPaths.size() > 1) {
-            const QString countStr = QStringLiteral("📦 %1 files").arg(validPaths.size());
-            QFont f = p.font();
-            f.setBold(true);
-            f.setPointSize(9);
-            p.setFont(f);
-            QFontMetrics fm(f);
-            const int pillW = fm.horizontalAdvance(countStr) + 12;
-            const QRectF pill(badge.width() - pillW - 4, badge.height() - 22, pillW, 18);
-            QPainterPath pp;
-            pp.addRoundedRect(pill, 6, 6);
-            p.fillPath(pp, QColor(79, 70, 229, 240));
-            p.setPen(QColor(255, 255, 255));
-            p.drawText(pill, Qt::AlignCenter, countStr);
+        const QImage small = ColorUtils::loadImage(paths.first(), QSize(240, 240));
+        if (!small.isNull()) {
+            thumbPix = QPixmap::fromImage(small.scaled(240, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         }
-        p.end();
-
+    }
+    const QPixmap badge = FileActions::makeDragBadge(thumbPix, static_cast<int>(localFiles.size()));
+    if (!badge.isNull()) {
         drag->setPixmap(badge);
         drag->setHotSpot(QPoint(badge.width() / 2, badge.height() / 2));
     }
-
-    drag->setMimeData(mimeData);
     drag->exec(Qt::CopyAction);
 }
 
 void GalleryView::startDragForIndex(const QModelIndex& index) {
-    const auto* gModel = qobject_cast<const GalleryModel*>(model());
-    if (!gModel) return;
+    const GalleryModel* gModel = galleryModel();
+    if (!gModel || !index.isValid()) return;
 
     const auto* item = gModel->getItem(index.row());
     if (!item) return;
@@ -359,8 +432,7 @@ void GalleryView::startDragForIndex(const QModelIndex& index) {
 void GalleryView::mouseDoubleClickEvent(QMouseEvent* event) {
     const QModelIndex idx = indexAt(event->pos());
     if (idx.isValid()) {
-        const auto* gModel = qobject_cast<const GalleryModel*>(model());
-        if (gModel) {
+        if (const GalleryModel* gModel = galleryModel()) {
             if (const auto* it = gModel->getItem(idx.row())) {
                 emit openViewerRequested(*it, idx.row());
                 return;
@@ -373,35 +445,30 @@ void GalleryView::mouseDoubleClickEvent(QMouseEvent* event) {
 void GalleryView::keyPressEvent(QKeyEvent* event) {
     const int key = event->key();
     const auto mods = event->modifiers();
+    const GalleryModel* gModel = galleryModel();
 
-    if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
+    if ((key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) && hasNoModifiers(mods)) {
         const QModelIndex idx = currentIndex();
-        if (idx.isValid()) {
-            const auto* gModel = qobject_cast<const GalleryModel*>(model());
-            if (gModel) {
-                if (const auto* it = gModel->getItem(idx.row())) {
-                    emit openViewerRequested(*it, idx.row());
-                    return;
-                }
+        if (idx.isValid() && gModel) {
+            if (const auto* it = gModel->getItem(idx.row())) {
+                emit openViewerRequested(*it, idx.row());
+                return;
             }
         }
     } else if (mods == Qt::ControlModifier && key == Qt::Key_A) {
         selectAllItems();
         return;
-    } else if (key == Qt::Key_Escape) {
+    } else if (key == Qt::Key_Escape && hasNoModifiers(mods)) {
         if (!getSelectedPaths().isEmpty()) {
             clearAllSelection();
             return;
         }
-    } else if (key == Qt::Key_F || key == Qt::Key_S) {
+    } else if ((key == Qt::Key_F || key == Qt::Key_S) && hasNoModifiers(mods)) {
         const QModelIndex idx = currentIndex();
-        if (idx.isValid()) {
-            const auto* gModel = qobject_cast<const GalleryModel*>(model());
-            if (gModel) {
-                if (const auto* it = gModel->getItem(idx.row())) {
-                    emit favoriteToggled(idx.row(), it->path);
-                    return;
-                }
+        if (idx.isValid() && gModel) {
+            if (const auto* it = gModel->getItem(idx.row())) {
+                emit favoriteToggled(idx.row(), it->path);
+                return;
             }
         }
     } else if (mods == Qt::ControlModifier && key == Qt::Key_C) {
@@ -416,37 +483,7 @@ void GalleryView::keyPressEvent(QKeyEvent* event) {
 }
 
 void GalleryView::copySelectedFiles() {
-    const QStringList paths = getSelectedPaths();
-    if (paths.isEmpty()) return;
-
-    QList<QUrl> urls;
-    QStringList resolvedPaths;
-    for (const QString& p : paths) {
-        if (ZipUtils::isZipPath(p)) {
-            const QString extracted = ZipUtils::ensureExtracted(p);
-            if (!extracted.isEmpty() && QFile::exists(extracted)) {
-                urls.append(QUrl::fromLocalFile(extracted));
-                resolvedPaths.append(extracted);
-            }
-        } else if (QFile::exists(p)) {
-            urls.append(QUrl::fromLocalFile(p));
-            resolvedPaths.append(p);
-        }
-    }
-    if (urls.isEmpty()) return;
-
-    auto* mimeData = new QMimeData();
-    mimeData->setUrls(urls);
-    mimeData->setText(resolvedPaths.join(QStringLiteral("\n")));
-
-    QStringList urlStrings;
-    for (const QUrl& u : urls) {
-        urlStrings.append(u.toString());
-    }
-    const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
-    mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
-
-    QApplication::clipboard()->setMimeData(mimeData);
+    FileActions::copyFilesToClipboard(getSelectedPaths());
 }
 
 void GalleryView::copySelectedPaths() {
@@ -457,181 +494,130 @@ void GalleryView::copySelectedPaths() {
 
 void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
     const QModelIndex idx = indexAt(event->pos());
-    const auto* gModel = qobject_cast<const GalleryModel*>(model());
+    const GalleryModel* gModel = galleryModel();
     if (!gModel) return;
 
     const QStringList selectedPaths = getSelectedPaths();
-    const bool isMulti = selectedPaths.size() > 1 && (idx.isValid() && selectedPaths.contains(gModel->getItem(idx.row())->path));
+    const ImageRecord* clicked = idx.isValid() ? gModel->getItem(idx.row()) : nullptr;
+    const bool isMulti = selectedPaths.size() > 1 && clicked && selectedPaths.contains(clicked->path);
 
     QMenu menu(this);
-    if (m_darkMode) {
-        menu.setStyleSheet(QStringLiteral(
-            "QMenu {"
-            "    background-color: #1e2230;"
-            "    color: #e2e8f0;"
-            "    border: 1px solid #334155;"
-            "    border-radius: 6px;"
-            "    padding: 4px;"
-            "}"
-            "QMenu::item {"
-            "    padding: 6px 20px 6px 12px;"
-            "    border-radius: 4px;"
-            "}"
-            "QMenu::item:selected {"
-            "    background-color: #4f46e5;"
-            "    color: #ffffff;"
-            "}"
-            "QMenu::separator {"
-            "    height: 1px;"
-            "    background-color: #334155;"
-            "    margin: 4px 8px;"
-            "}"
-        ));
-    } else {
-        menu.setStyleSheet(QStringLiteral(
-            "QMenu {"
-            "    background-color: #ffffff;"
-            "    color: #0f172a;"
-            "    border: 1px solid #cbd5e1;"
-            "    border-radius: 6px;"
-            "    padding: 4px;"
-            "}"
-            "QMenu::item {"
-            "    padding: 6px 20px 6px 12px;"
-            "    border-radius: 4px;"
-            "}"
-            "QMenu::item:selected {"
-            "    background-color: #4f46e5;"
-            "    color: #ffffff;"
-            "}"
-            "QMenu::separator {"
-            "    height: 1px;"
-            "    background-color: #e2e8f0;"
-            "    margin: 4px 8px;"
-            "}"
-        ));
-    }
+    menu.setStyleSheet(menuStyleSheet(m_darkMode));
 
     if (isMulti) {
         auto* actCount = menu.addAction(QStringLiteral("📦 %1 files selected").arg(selectedPaths.size()));
         actCount->setEnabled(false);
 
-        auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach (%1 files)").arg(selectedPaths.size()));
+        const auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach (%1 files)").arg(selectedPaths.size()));
         connect(actDrag, &QAction::triggered, this, [this, selectedPaths]() {
             startDragFiles(selectedPaths);
         });
 
         menu.addSeparator();
 
-        auto* actCopyFiles = menu.addAction(QStringLiteral("📁 Copy %1 Files (Attach) (Ctrl+C)").arg(selectedPaths.size()));
-        connect(actCopyFiles, &QAction::triggered, this, &GalleryView::copySelectedFiles);
+        const auto* actCopyFiles = menu.addAction(QStringLiteral("📁 Copy %1 Files (Attach) (Ctrl+C)").arg(selectedPaths.size()));
+        connect(actCopyFiles, &QAction::triggered, this, [selectedPaths]() {
+            FileActions::copyFilesToClipboard(selectedPaths);
+        });
 
-        auto* actCopyPaths = menu.addAction(QStringLiteral("📋 Copy %1 File Paths (Ctrl+Shift+C)").arg(selectedPaths.size()));
-        connect(actCopyPaths, &QAction::triggered, this, &GalleryView::copySelectedPaths);
+        const auto* actCopyPaths = menu.addAction(QStringLiteral("📋 Copy %1 File Paths (Ctrl+Shift+C)").arg(selectedPaths.size()));
+        connect(actCopyPaths, &QAction::triggered, this, [selectedPaths]() {
+            QApplication::clipboard()->setText(selectedPaths.join(QStringLiteral("\n")));
+        });
 
         menu.addSeparator();
 
-        auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
+        const auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
         connect(actInvert, &QAction::triggered, this, &GalleryView::invertSelection);
 
-        auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
+        const auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
         connect(actClear, &QAction::triggered, this, &GalleryView::clearAllSelection);
 
-    } else if (idx.isValid()) {
-        const auto* item = gModel->getItem(idx.row());
-        if (item) {
-            const ImageRecord itemRecord = *item;
-            const QString path = itemRecord.path;
-            const bool isSelected = selectionModel() && selectionModel()->isSelected(idx);
+    } else if (clicked) {
+        // Copy the record and keep a persistent index: menu.exec() runs an
+        // event loop, and a refresh can reorder or reset rows meanwhile.
+        const ImageRecord itemRecord = *clicked;
+        const QString path = itemRecord.path;
+        const QPersistentModelIndex pidx(idx);
+        const bool isSelected = selectionModel() && selectionModel()->isSelected(idx);
 
-            auto* actOpen = menu.addAction(QStringLiteral("🔍 Open in Viewer (Return)"));
-            connect(actOpen, &QAction::triggered, this, [this, itemRecord, idx]() {
-                emit openViewerRequested(itemRecord, idx.row());
-            });
+        const auto* actOpen = menu.addAction(QStringLiteral("🔍 Open in Viewer (Return)"));
+        connect(actOpen, &QAction::triggered, this, [this, itemRecord, pidx]() {
+            emit openViewerRequested(itemRecord, pidx.isValid() ? pidx.row() : -1);
+        });
 
-            auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach"));
-            connect(actDrag, &QAction::triggered, this, [this, path]() {
-                startDragFiles(QStringList{path});
-            });
+        const auto* actDrag = menu.addAction(QStringLiteral("📤 Drag to Share / Attach"));
+        connect(actDrag, &QAction::triggered, this, [this, path]() {
+            startDragFiles(QStringList{path});
+        });
 
-            auto* actToggleSel = menu.addAction(isSelected ? QStringLiteral("☑️ Deselect") : QStringLiteral("☑️ Select"));
-            connect(actToggleSel, &QAction::triggered, this, [this, idx, isSelected]() {
-                if (selectionModel()) {
-                    selectionModel()->select(idx, isSelected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select);
-                }
-            });
-
-            menu.addSeparator();
-
-            auto* actCopyFile = menu.addAction(QStringLiteral("📁 Copy File (Attach) (Ctrl+C)"));
-            connect(actCopyFile, &QAction::triggered, this, &GalleryView::copySelectedFiles);
-
-            auto* actCopyPath = menu.addAction(QStringLiteral("📋 Copy File Path (Ctrl+Shift+C)"));
-            connect(actCopyPath, &QAction::triggered, this, &GalleryView::copySelectedPaths);
-
-            auto* actCopyImg = menu.addAction(QStringLiteral("🖼️ Copy Image Bitmap"));
-            connect(actCopyImg, &QAction::triggered, this, [this, path]() {
-                copyImageBitmap(path);
-            });
-
-            if (!itemRecord.dhash.isEmpty()) {
-                auto* actSim = menu.addAction(QStringLiteral("✨ Find Visually Similar Images"));
-                connect(actSim, &QAction::triggered, this, [this, itemRecord]() {
-                    emit findSimilarRequested(itemRecord.dhash, itemRecord.filename);
-                });
+        const auto* actToggleSel = menu.addAction(isSelected ? QStringLiteral("☑️ Deselect") : QStringLiteral("☑️ Select"));
+        connect(actToggleSel, &QAction::triggered, this, [this, pidx, isSelected]() {
+            if (selectionModel() && pidx.isValid()) {
+                selectionModel()->select(QModelIndex(pidx), isSelected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select);
             }
+        });
 
-            menu.addSeparator();
+        menu.addSeparator();
 
-            if (!itemRecord.subfolder.isEmpty()) {
-                const QString sub = itemRecord.subfolder;
-                auto* actFolder = menu.addAction(QStringLiteral("📂 Show Only Folder: %1").arg(sub));
-                connect(actFolder, &QAction::triggered, this, [this, sub]() {
-                    emit filterToSubfolderRequested(sub);
-                });
-            }
+        // These act on the clicked card, like every other entry here.
+        const auto* actCopyFile = menu.addAction(QStringLiteral("📁 Copy File (Attach)"));
+        connect(actCopyFile, &QAction::triggered, this, [path]() {
+            FileActions::copyFilesToClipboard({path});
+        });
 
-            auto* actFav = menu.addAction(itemRecord.isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
-            connect(actFav, &QAction::triggered, this, [this, idx, itemRecord]() {
-                emit favoriteToggled(idx.row(), itemRecord.path);
-            });
+        const auto* actCopyPath = menu.addAction(QStringLiteral("📋 Copy File Path"));
+        connect(actCopyPath, &QAction::triggered, this, [path]() {
+            QApplication::clipboard()->setText(path);
+        });
 
-            menu.addSeparator();
+        const auto* actCopyImg = menu.addAction(QStringLiteral("🖼️ Copy Image Bitmap"));
+        connect(actCopyImg, &QAction::triggered, this, [this, path]() {
+            copyImageBitmap(path);
+        });
 
-            auto* actOpenDef = menu.addAction(QStringLiteral("↗️ Open in Default Viewer"));
-            connect(actOpenDef, &QAction::triggered, this, [path]() {
-                QString target = path;
-                if (ZipUtils::isZipPath(path)) {
-                    target = ZipUtils::ensureExtracted(path);
-                }
-                if (!target.isEmpty() && QFile::exists(target)) {
-                    QDesktopServices::openUrl(QUrl::fromLocalFile(target));
-                }
-            });
-
-            auto* actReveal = menu.addAction(QStringLiteral("🗂️ Reveal in File Manager"));
-            connect(actReveal, &QAction::triggered, this, [path]() {
-                QString target = path;
-                QString zipPath;
-                if (ZipUtils::isZipPath(path, &zipPath)) {
-                    target = zipPath;
-                }
-                const QFileInfo fi(target);
-                if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), target})) {
-                    if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), target})) {
-                        QProcess::startDetached(QStringLiteral("xdg-open"), QStringList{fi.absolutePath()});
-                    }
-                }
+        if (!itemRecord.dhash.isEmpty()) {
+            const auto* actSim = menu.addAction(QStringLiteral("✨ Find Visually Similar Images"));
+            connect(actSim, &QAction::triggered, this, [this, itemRecord]() {
+                emit findSimilarRequested(itemRecord.dhash, itemRecord.filename);
             });
         }
+
+        menu.addSeparator();
+
+        if (!itemRecord.subfolder.isEmpty()) {
+            const QString sub = itemRecord.subfolder;
+            const auto* actFolder = menu.addAction(
+                QStringLiteral("📂 Show Only Folder: %1").arg(FileActions::escapeMnemonics(sub)));
+            connect(actFolder, &QAction::triggered, this, [this, sub]() {
+                emit filterToSubfolderRequested(sub);
+            });
+        }
+
+        const auto* actFav = menu.addAction(itemRecord.isFavorite ? QStringLiteral("★ Unfavorite (F)") : QStringLiteral("⭐ Favorite (F)"));
+        connect(actFav, &QAction::triggered, this, [this, pidx, path]() {
+            emit favoriteToggled(pidx.isValid() ? pidx.row() : -1, path);
+        });
+
+        menu.addSeparator();
+
+        const auto* actOpenDef = menu.addAction(QStringLiteral("↗️ Open in Default Viewer"));
+        connect(actOpenDef, &QAction::triggered, this, [path]() {
+            FileActions::openWithDefaultApp(path);
+        });
+
+        const auto* actReveal = menu.addAction(QStringLiteral("🗂️ Reveal in File Manager"));
+        connect(actReveal, &QAction::triggered, this, [path]() {
+            FileActions::revealInFileManager(path);
+        });
     } else {
-        auto* actSelectAll = menu.addAction(QStringLiteral("✓ Select All (Ctrl+A)"));
+        const auto* actSelectAll = menu.addAction(QStringLiteral("✓ Select All (Ctrl+A)"));
         connect(actSelectAll, &QAction::triggered, this, &GalleryView::selectAllItems);
 
-        auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
+        const auto* actInvert = menu.addAction(QStringLiteral("🔄 Invert Selection"));
         connect(actInvert, &QAction::triggered, this, &GalleryView::invertSelection);
 
-        auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
+        const auto* actClear = menu.addAction(QStringLiteral("✕ Clear Selection (Esc)"));
         connect(actClear, &QAction::triggered, this, &GalleryView::clearAllSelection);
     }
 

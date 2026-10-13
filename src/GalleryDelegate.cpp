@@ -14,7 +14,10 @@ GalleryDelegate::GalleryDelegate(ThumbnailManager* thumbMgr, QObject* parent)
 }
 
 void GalleryDelegate::setCardSize(int size) {
+    if (size == m_cardSize) return;
     m_cardSize = size;
+    // Re-lays out the view without a reset (which would drop the selection).
+    emit sizeHintChanged(QModelIndex());
 }
 
 void GalleryDelegate::setSelectMode(bool enabled) {
@@ -99,6 +102,7 @@ void GalleryDelegate::paint(QPainter* painter, const QStyleOptionViewItem& optio
 
     if (pix.isNull()) {
         if (m_thumbMgr) {
+            // No-op for images already queued/running or known to be broken.
             m_thumbMgr->requestPriorityThumbnail(path);
         }
         painter->setPen(m_darkMode ? QColor(80, 95, 120) : QColor(160, 175, 195));

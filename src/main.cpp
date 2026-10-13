@@ -2,6 +2,7 @@
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QFileInfo>
+#include <QDebug>
 #include <QDir>
 #include "MainWindow.h"
 #include "Config.h"
@@ -90,8 +91,11 @@ int main(int argc, char* argv[]) {
 
     const QStringList args = parser.positionalArguments();
     QString targetDir = args.isEmpty() ? OmniView::Config::defaultRootDir() : args.first();
-    if (!QDir(targetDir).exists()) {
-        targetDir = QDir::homePath();
+    if (!QFileInfo(targetDir).isDir()) {
+        // A typo or a file path must not silently index the whole home folder.
+        qWarning().noquote() << "Not a directory:" << targetDir
+                             << "- opening" << OmniView::Config::defaultRootDir() << "instead";
+        targetDir = OmniView::Config::defaultRootDir();
     }
 
     OmniView::MainWindow window(targetDir);
