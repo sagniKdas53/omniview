@@ -545,6 +545,8 @@ private slots:
                 QVERIFY2(pix.width() <= ViewerWindow::MAX_VIEW_DIMENSION
                              && pix.height() <= ViewerWindow::MAX_VIEW_DIMENSION,
                          qPrintable(QStringLiteral("%1x%2").arg(pix.width()).arg(pix.height())));
+                // Exact fit, no sub-1 ratio (Qt 6.11 drops those).
+                QVERIFY2(pix.devicePixelRatio() >= 1.0, qPrintable(QString::number(pix.devicePixelRatio())));
                 QCOMPARE(qRound(pix.width() / pix.devicePixelRatio()), label->width());
             }
         }

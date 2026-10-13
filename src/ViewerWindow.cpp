@@ -377,9 +377,12 @@ void ViewerWindow::updateDisplay() {
     if (deviceSize.width() > MAX_VIEW_DIMENSION || deviceSize.height() > MAX_VIEW_DIMENSION) {
         deviceSize = deviceSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
     }
+    // deviceSize already has targetSize's aspect ratio; scaling to it exactly
+    // avoids KeepAspectRatio rounding the width off by a pixel or two (Qt 6.11
+    // then rejects the resulting sub-1 device pixel ratio).
     QPixmap pix = QPixmap::fromImage(
-        m_currentImage.scaled(deviceSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    pix.setDevicePixelRatio(static_cast<qreal>(pix.width()) / targetSize.width());
+        m_currentImage.scaled(deviceSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    pix.setDevicePixelRatio(static_cast<qreal>(deviceSize.width()) / targetSize.width());
     m_imageLabel->setPixmap(pix);
     m_imageLabel->setFixedSize(targetSize);
 
