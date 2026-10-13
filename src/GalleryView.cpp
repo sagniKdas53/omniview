@@ -574,7 +574,7 @@ void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
                 copyImageBitmap(path);
             });
 
-            if (!itemRecord.dhash.isEmpty() && itemRecord.dhash != QStringLiteral("0000000000000000")) {
+            if (!itemRecord.dhash.isEmpty()) {
                 auto* actSim = menu.addAction(QStringLiteral("✨ Find Visually Similar Images"));
                 connect(actSim, &QAction::triggered, this, [this, itemRecord]() {
                     emit findSimilarRequested(itemRecord.dhash, itemRecord.filename);

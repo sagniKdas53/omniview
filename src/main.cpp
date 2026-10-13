@@ -5,6 +5,7 @@
 #include <QDir>
 #include "MainWindow.h"
 #include "Config.h"
+#include "ColorUtils.h"
 
 int main(int argc, char* argv[]) {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
@@ -18,6 +19,7 @@ int main(int argc, char* argv[]) {
     app.setApplicationDisplayName(OmniView::Config::appTitle());
     app.setApplicationVersion(QStringLiteral(OMNIVIEW_VERSION));
     app.setDesktopFileName(QStringLiteral("omniview.desktop"));
+    OmniView::ColorUtils::configureImageIO();
 
     // Register custom types for cross-thread Qt signal/slot delivery
     qRegisterMetaType<OmniView::Stats>("OmniView::Stats");

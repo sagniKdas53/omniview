@@ -864,7 +864,7 @@ void MainWindow::refreshGallery() {
     if (!m_similarityTargetDHash.isEmpty()) {
         QVector<QPair<int, ImageRecord>> scored;
         for (const auto& rec : m_currentItems) {
-            if (rec.dhash.isEmpty() || rec.dhash == QStringLiteral("0000000000000000")) {
+            if (rec.dhash.isEmpty()) {
                 continue;
             }
             int dist = ColorUtils::hammingDistance(m_similarityTargetDHash, rec.dhash);

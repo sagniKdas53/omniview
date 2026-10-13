@@ -121,3 +121,4 @@ add_test(NAME OmniViewTests COMMAND omniview_tests -o -,txt -o omniview-test-res
 set_tests_properties(OmniViewTests PROPERTIES ENVIRONMENT "${OMNIVIEW_TEST_ENV}" TIMEOUT 300)
 
 omniview_add_test(database_regression_tests tests/test_database_regressions.cpp)
+omniview_add_test(imaging_tests             tests/test_imaging.cpp)

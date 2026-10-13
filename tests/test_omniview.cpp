@@ -598,6 +598,7 @@ int main(int argc, char** argv) {
     qputenv("OMNIVIEW_CACHE_DIR", cache.path().toUtf8());
     QApplication app(argc, argv);
     QStandardPaths::setTestModeEnabled(true);
+    ColorUtils::configureImageIO();
     TestOmniView test;
     return QTest::qExec(&test, argc, argv);
 }
