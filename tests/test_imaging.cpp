@@ -340,7 +340,9 @@ private slots:
         f.write(webpHeaderOnly(9000, 9000));
         f.close();
         QImageReader probe(src);
-        if (probe.size() != QSize(9000, 9000)) QSKIP("No WebP image plugin");
+        QVERIFY2(probe.size() == QSize(9000, 9000),
+                 "Prerequisite: the Qt WebP image plugin (qt5/qt6-image-formats-plugins, "
+                 "or the qtimageformats module) must be installed");
         QString error;
         QVERIFY(ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error).isNull());
         QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
