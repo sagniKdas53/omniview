@@ -66,6 +66,13 @@ public:
                             QSize* originalSize = nullptr,
                             QString* errorString = nullptr);
 
+    // Largest stored image (in pixels) loadImage accepts from a reader with
+    // this format and ScaledSize support when asked for scaledSize (invalid:
+    // full-size decode). Only JPEG decodes straight to a reduced size, so only
+    // JPEG gets more than MAX_IMAGE_PIXELS, and only if the output fits it.
+    static qint64 decodePixelLimit(const QByteArray& format, bool handlerSupportsScaledSize,
+                                   const QSize& scaledSize);
+
     // Fills colour and dHash fields of feat from a decoded thumbnail.
     static void computeFeaturesFromThumbnail(const QImage& thumb, ImageFeatures& feat);
 

@@ -160,6 +160,18 @@ void ColorUtils::configureImageIO() {
 #endif
 }
 
+qint64 ColorUtils::decodePixelLimit(const QByteArray& format, bool handlerSupportsScaledSize,
+                                   const QSize& scaledSize) {
+    // libjpeg reduces by up to 1/8 per side while decoding. PNG advertises
+    // ScaledSize but decodes in full and scales afterwards; WebP has no
+    // ScaledSize support at all (Qt 5.15 / 6.x), so both keep the plain cap.
+    const bool decodesReduced = scaledSize.isValid()
+        && static_cast<qint64>(scaledSize.width()) * scaledSize.height() <= MAX_IMAGE_PIXELS
+        && (format == "jpeg" || format == "jpg")
+        && handlerSupportsScaledSize;
+    return decodesReduced ? MAX_IMAGE_PIXELS * 64 : MAX_IMAGE_PIXELS;
+}
+
 QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox,
                              QSize* originalSize, QString* errorString) {
     auto fail = [errorString](const QString& why) {
@@ -194,16 +206,8 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
         scaledSize = storedSize.scaled(side, side, Qt::KeepAspectRatio);
     }
 
-    // Only JPEG (libjpeg, up to 1/8 per side) decodes straight to a reduced
-    // size, so it may take larger sources as long as the reduced output itself
-    // fits the cap. PNG advertises ScaledSize but decodes in full and scales
-    // afterwards; WebP has no ScaledSize support at all (Qt 5.15 / 6.x).
-    const QByteArray format = reader.format();
-    const bool decodesReduced = scaledSize.isValid()
-        && static_cast<qint64>(scaledSize.width()) * scaledSize.height() <= MAX_IMAGE_PIXELS
-        && (format == "jpeg" || format == "jpg")
-        && reader.supportsOption(QImageIOHandler::ScaledSize);
-    const qint64 pixelLimit = decodesReduced ? MAX_IMAGE_PIXELS * 64 : MAX_IMAGE_PIXELS;
+    const qint64 pixelLimit = decodePixelLimit(
+        reader.format(), reader.supportsOption(QImageIOHandler::ScaledSize), scaledSize);
     if (storedSize.isValid()
         && static_cast<qint64>(storedSize.width()) * storedSize.height() > pixelLimit) {
         return fail(QStringLiteral("Image is too large (%1×%2)")

@@ -50,25 +50,6 @@ QByteArray pngHeaderOnly(quint32 w, quint32 h) {
     return png;
 }
 
-// A lossless WebP (VP8L) whose header claims w x h (each <= 16384); enough
-// for QImageReader::size() without decoding any pixels.
-QByteArray webpHeaderOnly(quint32 w, quint32 h) {
-    const quint32 bits = (w - 1) | ((h - 1) << 14); // no alpha, version 0
-    QByteArray vp8l(1, static_cast<char>(0x2f)); // VP8L signature
-    for (int shift = 0; shift < 32; shift += 8) vp8l.append(static_cast<char>((bits >> shift) & 0xFF));
-    vp8l.append(QByteArray(11, '\0')); // a little payload; chunk size stays even
-    QByteArray chunk("VP8L");
-    for (int shift = 0; shift < 32; shift += 8) {
-        chunk.append(static_cast<char>((static_cast<quint32>(vp8l.size()) >> shift) & 0xFF));
-    }
-    const QByteArray body = QByteArray("WEBP") + chunk + vp8l;
-    QByteArray riff("RIFF");
-    for (int shift = 0; shift < 32; shift += 8) {
-        riff.append(static_cast<char>((static_cast<quint32>(body.size()) >> shift) & 0xFF));
-    }
-    return riff + body;
-}
-
 QImage noise(int w, int h, int seed) {
     QImage img(w, h, QImage::Format_RGB32);
     for (int y = 0; y < h; ++y) {
@@ -336,25 +317,30 @@ private slots:
         QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
     }
 
-    void hugeWebpIsRejectedEvenWithBox() {
-        // Qt's WebP handler has no ScaledSize support: it decodes in full.
-        QTemporaryDir tmp;
-        const QString src = tmp.filePath(QStringLiteral("huge.webp"));
-        QFile f(src);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write(webpHeaderOnly(9000, 9000));
-        f.close();
+    void onlyJpegGetsTheReducedDecodeAllowance() {
+        // Real readers on small real files: WebP has no ScaledSize support in
+        // Qt (it decodes in full), PNG advertises it but scales after a full
+        // decode, so only JPEG may exceed MAX_IMAGE_PIXELS. (Header-only
+        // oversized WebP files are not portable across libwebp versions.)
         QVERIFY2(QImageReader::supportedImageFormats().contains("webp"),
                  "Prerequisite: the Qt WebP image plugin (qt5/qt6-image-formats-plugins, "
                  "or the qtimageformats module) must be installed");
-        QImageReader probe(src);
-        QVERIFY2(probe.size() == QSize(9000, 9000),
-                 qPrintable(QStringLiteral("WebP header not understood: size %1x%2, %3")
-                                .arg(probe.size().width()).arg(probe.size().height())
-                                .arg(probe.errorString())));
-        QString error;
-        QVERIFY(ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error).isNull());
-        QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
+        QTemporaryDir tmp;
+        const QImage img = noise(64, 48, 5);
+        const QSize box(16, 12);
+        const auto limitFor = [&](const char* format) {
+            const QString path = tmp.filePath(QStringLiteral("small.") + QLatin1String(format));
+            if (!img.save(path, format)) return qint64(-1);
+            QImageReader reader(path);
+            return ColorUtils::decodePixelLimit(
+                reader.format(), reader.supportsOption(QImageIOHandler::ScaledSize), box);
+        };
+        QCOMPARE(limitFor("webp"), ColorUtils::MAX_IMAGE_PIXELS);
+        QCOMPARE(limitFor("png"), ColorUtils::MAX_IMAGE_PIXELS);
+        QCOMPARE(limitFor("jpg"), ColorUtils::MAX_IMAGE_PIXELS * 64);
+        // No reduced decode requested, or the reduced output itself too big.
+        QCOMPARE(ColorUtils::decodePixelLimit("jpeg", true, QSize()), ColorUtils::MAX_IMAGE_PIXELS);
+        QCOMPARE(ColorUtils::decodePixelLimit("jpeg", true, QSize(9000, 9000)), ColorUtils::MAX_IMAGE_PIXELS);
     }
 
     void undecodableSourceReportsError() {
