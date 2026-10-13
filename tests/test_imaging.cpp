@@ -50,6 +50,20 @@ QByteArray pngHeaderOnly(quint32 w, quint32 h) {
     return png;
 }
 
+// A WebP (VP8X) whose header claims w x h; enough for QImageReader::size().
+QByteArray webpHeaderOnly(quint32 w, quint32 h) {
+    QByteArray vp8x("VP8X\x0a\x00\x00\x00\x00\x00\x00\x00", 12);
+    for (quint32 v : {w - 1, h - 1}) {
+        for (int shift = 0; shift < 24; shift += 8) vp8x.append(static_cast<char>((v >> shift) & 0xFF));
+    }
+    const QByteArray body = QByteArray("WEBP") + vp8x;
+    QByteArray riff("RIFF");
+    for (int shift = 0; shift < 32; shift += 8) {
+        riff.append(static_cast<char>((static_cast<quint32>(body.size()) >> shift) & 0xFF));
+    }
+    return riff + body;
+}
+
 QImage noise(int w, int h, int seed) {
     QImage img(w, h, QImage::Format_RGB32);
     for (int y = 0; y < h; ++y) {
@@ -314,6 +328,21 @@ private slots:
         QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
         error.clear();
         QVERIFY(ColorUtils::loadImage(src, QSize(), nullptr, &error).isNull());
+        QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
+    }
+
+    void hugeWebpIsRejectedEvenWithBox() {
+        // Qt's WebP handler has no ScaledSize support: it decodes in full.
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("huge.webp"));
+        QFile f(src);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(webpHeaderOnly(9000, 9000));
+        f.close();
+        QImageReader probe(src);
+        if (probe.size() != QSize(9000, 9000)) QSKIP("No WebP image plugin");
+        QString error;
+        QVERIFY(ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error).isNull());
         QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
     }
 

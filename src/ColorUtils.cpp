@@ -194,14 +194,15 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
         scaledSize = storedSize.scaled(side, side, Qt::KeepAspectRatio);
     }
 
-    // JPEG (libjpeg, up to 1/8 per side) and WebP decode straight to a
-    // reduced size, so they may take larger sources as long as the reduced
-    // output itself fits the cap. Other handlers that advertise ScaledSize
-    // (e.g. PNG) decode in full and scale afterwards.
+    // Only JPEG (libjpeg, up to 1/8 per side) decodes straight to a reduced
+    // size, so it may take larger sources as long as the reduced output itself
+    // fits the cap. PNG advertises ScaledSize but decodes in full and scales
+    // afterwards; WebP has no ScaledSize support at all (Qt 5.15 / 6.x).
     const QByteArray format = reader.format();
     const bool decodesReduced = scaledSize.isValid()
         && static_cast<qint64>(scaledSize.width()) * scaledSize.height() <= MAX_IMAGE_PIXELS
-        && (format == "jpeg" || format == "jpg" || format == "webp");
+        && (format == "jpeg" || format == "jpg")
+        && reader.supportsOption(QImageIOHandler::ScaledSize);
     const qint64 pixelLimit = decodesReduced ? MAX_IMAGE_PIXELS * 64 : MAX_IMAGE_PIXELS;
     if (storedSize.isValid()
         && static_cast<qint64>(storedSize.width()) * storedSize.height() > pixelLimit) {

@@ -38,7 +38,7 @@ Clang's sanitizer runtime is not installed in this container, so sanitizer build
 | Check | Baseline (61a2d90) | After this PR |
 |---|---|---|
 | Build Qt 5 / Qt 6 | ✅ / ✅ (Qt 6: 10 deprecation warnings) | ✅ / ✅ (0 warnings) |
-| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 107 test functions) |
+| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 108 test functions) |
 | Warnings build (`-Wall -Wextra -Wpedantic -Wshadow -Wconversion`, unique) | Qt 5: **6**, Qt 6: **17** | Qt 5: **0**, Qt 6: **0** |
 | ASan+UBSan Qt 6 | 0 reports | 0 reports |
 | ASan+UBSan Qt 5 | **1** LeakSanitizer report (7 allocations, all in Qt's `libqoffscreen`) → suite fails | 0 (leak suppressed by library name, third-party only) |
@@ -164,7 +164,7 @@ Line numbers refer to the baseline commit.
 | M59 | `ZipUtils.cpp:154` | Each entry read re-opens the archive and walks the directory (O(N²) for big archives). | — | Open (follow-up: per-worker archive cache) |
 | M60 | `main.cpp:88` | A typo'd/non-directory argument silently indexed the entire `$HOME`. | Warn and open the default Pictures folder. | Fixed, R |
 | M61 | `tests/test_omniview.cpp:296` | QSignalSpy on a signal emitted from the Scanner thread: TSan data race, flaky test. | Tests wait on the thread / use queued connections. | Fixed, S |
-| M62 | `ColorUtils.cpp` (this PR, from CodeRabbit) | The pixel cap rejected >64 MP JPEGs (108/200 MP phone photos) even though libjpeg decodes them at up to 1/8 per side: no thumbnail, "too large" in the viewer. | JPEG/WebP may be 64× larger when a scaled decode is requested and its output fits the cap (a box as large as the image still gets the normal cap); others (PNG decodes in full despite advertising `ScaledSize`) keep the cap. | Fixed, T |
+| M62 | `ColorUtils.cpp` (this PR, from CodeRabbit) | The pixel cap rejected >64 MP JPEGs (108/200 MP phone photos) even though libjpeg decodes them at up to 1/8 per side: no thumbnail, "too large" in the viewer. | JPEG (the only handler that decodes at reduced size; WebP has no `ScaledSize` support) may be 64× larger when a scaled decode is requested and its output fits the cap (a box as large as the image still gets the normal cap); others (PNG decodes in full despite advertising `ScaledSize`) keep the cap. | Fixed, T |
 | M63 | `ViewerWindow.cpp` (this PR, from CodeRabbit) | `MAX_VIEW_DIMENSION` capped logical pixels; at a device pixel ratio of 2 the backing pixmap reached 16384² (~1 GiB) on every zoom step. | Cap applied in device pixels. | Fixed, T (`ui_tests_hidpi`) |
 
 ### Low
