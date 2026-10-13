@@ -50,13 +50,18 @@ QByteArray pngHeaderOnly(quint32 w, quint32 h) {
     return png;
 }
 
-// A WebP (VP8X) whose header claims w x h; enough for QImageReader::size().
+// A lossless WebP (VP8L) whose header claims w x h (each <= 16384); enough
+// for QImageReader::size() without decoding any pixels.
 QByteArray webpHeaderOnly(quint32 w, quint32 h) {
-    QByteArray vp8x("VP8X\x0a\x00\x00\x00\x00\x00\x00\x00", 12);
-    for (quint32 v : {w - 1, h - 1}) {
-        for (int shift = 0; shift < 24; shift += 8) vp8x.append(static_cast<char>((v >> shift) & 0xFF));
+    const quint32 bits = (w - 1) | ((h - 1) << 14); // no alpha, version 0
+    QByteArray vp8l(1, static_cast<char>(0x2f)); // VP8L signature
+    for (int shift = 0; shift < 32; shift += 8) vp8l.append(static_cast<char>((bits >> shift) & 0xFF));
+    vp8l.append(QByteArray(11, '\0')); // a little payload; chunk size stays even
+    QByteArray chunk("VP8L");
+    for (int shift = 0; shift < 32; shift += 8) {
+        chunk.append(static_cast<char>((static_cast<quint32>(vp8l.size()) >> shift) & 0xFF));
     }
-    const QByteArray body = QByteArray("WEBP") + vp8x;
+    const QByteArray body = QByteArray("WEBP") + chunk + vp8l;
     QByteArray riff("RIFF");
     for (int shift = 0; shift < 32; shift += 8) {
         riff.append(static_cast<char>((static_cast<quint32>(body.size()) >> shift) & 0xFF));
@@ -339,10 +344,14 @@ private slots:
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write(webpHeaderOnly(9000, 9000));
         f.close();
-        QImageReader probe(src);
-        QVERIFY2(probe.size() == QSize(9000, 9000),
+        QVERIFY2(QImageReader::supportedImageFormats().contains("webp"),
                  "Prerequisite: the Qt WebP image plugin (qt5/qt6-image-formats-plugins, "
                  "or the qtimageformats module) must be installed");
+        QImageReader probe(src);
+        QVERIFY2(probe.size() == QSize(9000, 9000),
+                 qPrintable(QStringLiteral("WebP header not understood: size %1x%2, %3")
+                                .arg(probe.size().width()).arg(probe.size().height())
+                                .arg(probe.errorString())));
         QString error;
         QVERIFY(ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error).isNull());
         QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
