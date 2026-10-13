@@ -1,0 +1,43 @@
+---
+# Run with a compile database, e.g.:
+#   cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && clang-tidy -p build src/*.cpp tests/*.cpp
+# src/miniz.* is vendored and excluded by the header filter (lower-case name).
+Checks: >
+  -*,
+  bugprone-*,
+  concurrency-*,
+  performance-*,
+  modernize-*,
+  cppcoreguidelines-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  -modernize-avoid-c-arrays,
+  -modernize-use-auto,
+  -modernize-return-braced-init-list,
+  -modernize-concat-nested-namespaces,
+  -performance-enum-size,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-narrowing-conversions,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -cppcoreguidelines-prefer-member-initializer,
+  -cppcoreguidelines-macro-usage
+# Rationale for the Qt-specific exclusions:
+#  owning-memory / prefer-member-initializer: Qt parent-child ownership and
+#    widget trees built in constructor bodies.
+#  pro-type-static-cast-downcast: QEvent subclasses are cast by type().
+#  pro-bounds-*: scanline pixel loops over QImage::constScanLine().
+#  return-braced-init-list / concat-nested-namespaces / enum-size: style only.
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/src/[A-Z][A-Za-z]*\.h$'
+...

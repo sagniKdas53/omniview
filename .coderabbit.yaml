@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    # Vendored third-party code: only ever updated wholesale from upstream.
+    - "!src/miniz.c"
+    - "!src/miniz.h"
+    - "!assets/**"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.webp"
+    - "!**/*.gif"
+    - "!**/*.bmp"
+    - "!**/*.ico"
+    - "!**/*.svg"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        OmniView is a C++17 Qt 5 / Qt 6 image gallery. Every change must build and
+        behave the same on both Qt 5.15 and Qt 6 (guard API differences with
+        QT_VERSION_CHECK) and on Linux (X11 and Wayland), macOS and Windows.
+        Focus on:
+        - Threading: which objects run on QThreadPool / Scanner threads vs the GUI
+          thread; QObject thread affinity; QPixmap/widgets only on the GUI thread;
+          results returned via queued signals/invokeMethod; lifetime of runnables
+          versus ThumbnailManager after a folder change or app close; shared state
+          guarded by a mutex ThreadSanitizer can see (std::mutex).
+        - SQLite (Database.cpp): one QSqlDatabase connection per Database instance,
+          used from one thread and removed in the destructor; prepared statements
+          only (never string-built values); transactions around bulk writes;
+          busy/locked handling; pruning must never wipe the index when the root or
+          an archive is temporarily unavailable; unicode paths.
+        - Schema and shared-cache compatibility: the database schema and the
+          thumbnail cache (thumbnails/{sha256(utf8 path)[:24]}.webp under the cache
+          dir) are shared with the Python and Rust OmniView implementations. Flag any
+          change to table/column definitions without a migration, to the cache key
+          derivation, file name, format or directory.
+        - ZipUtils: zip-slip and absolute/drive-letter entry names, corrupt or
+          truncated archives, decompression bombs and memory caps, encrypted or
+          unsupported entries, non-UTF-8 (CP437) names, exact (case-sensitive)
+          lookups, and the "archive.zip#entry" composite path format.
+        - Images: EXIF orientation, decode failures (must not be retried forever),
+          huge images and Qt's allocation limit, animated formats, atomic cache
+          writes (QSaveFile), corrupt cached WebP files.
+        - QFileSystemWatcher (LibraryWatcher): inotify watch limits, symlink loops,
+          debounce/max-delay correctness, rename/delete races during a scan.
+        - Ownership: prefer Qt parent ownership or RAII over raw new/delete; keep
+          logic out of widgets where it can live in testable classes (FilterState,
+          LibraryWatcher, FileActions).
+    - path: "tests/**"
+      instructions: |
+        QtTest suites run under ctest with QT_QPA_PLATFORM=offscreen and in CI under
+        ASan+UBSan and TSan. Tests must not touch the real user cache (use the
+        OMNIVIEW_TEST_MAIN macro), must not use QSignalSpy on signals emitted from
+        other threads (connect with Qt::QueuedConnection instead), and must never be
+        skipped or weakened to get CI green.
+    - path: "CMakeLists.txt"
+      instructions: |
+        Keep Qt 5 and Qt 6 both supported. Warnings (OMNIVIEW_WARNINGS) apply to
+        project targets only, never to vendored miniz. Sanitizers stay opt-in via
+        OMNIVIEW_SANITIZE.
+    - path: ".github/workflows/**"
+      instructions: |
+        CI must keep building and testing on Linux, macOS and Windows plus the Linux
+        sanitizer matrix. Do not suggest disabling tests or sanitizer checks.
+chat:
+  auto_reply: true

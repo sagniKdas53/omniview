@@ -1,0 +1,15 @@
+# ThreadSanitizer suppressions for uninstrumented Qt libraries.
+#
+# Qt is not built with -fsanitize=thread, so TSan cannot see the
+# synchronisation inside Qt's own worker threads (for example the internal
+# QThreadPool QImage::scaled() uses for smooth scaling). Memory allocated or
+# copied *by Qt itself* across those threads is reported as a race.
+# `called_from_lib` only silences interceptors (new/delete/memmove/realloc)
+# invoked directly from these libraries; races in OmniView's own instrumented
+# code are still reported.
+called_from_lib:libQt5Core.so.5
+called_from_lib:libQt5Gui.so.5
+called_from_lib:libQt6Core.so.6
+called_from_lib:libQt6Gui.so.6
+called_from_lib:libQt5Test.so.5
+called_from_lib:libQt6Test.so.6

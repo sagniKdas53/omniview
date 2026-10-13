@@ -48,6 +48,7 @@ jobs:
             ninja-build \
             qtbase5-dev \
             libqt5sql5-sqlite \
+            qt5-image-formats-plugins \
             qttools5-dev-tools
 
       # --- macOS dependencies ---
@@ -63,6 +64,8 @@ jobs:
         with:
           version: '6.8.3'
           arch: 'win64_msvc2022_64'
+          # WebP support for the shared thumbnail cache format.
+          modules: 'qtimageformats'
 
       # --- Configure CMake ---
       - name: Configure CMake (Linux)
@@ -103,8 +106,10 @@ jobs:
         run: |
           windeployqt --release --no-translations build\Release\omniview_tests.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          windeployqt --release --no-translations build\Release\database_regression_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($t in @('database_regression_tests', 'imaging_tests', 'zip_scanner_tests', 'thumbnail_tests', 'ui_tests')) {
+            windeployqt --release --no-translations "build\Release\$t.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       # --- Run Tests ---
       - name: Run Tests (Linux)
@@ -160,3 +165,55 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/
           if-no-files-found: error
+
+  sanitizers:
+    name: Sanitizers (${{ matrix.sanitizer_name }}, Qt ${{ matrix.qt }})
+    runs-on: ubuntu-24.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+    strategy:
+      fail-fast: false
+      matrix:
+        qt: [5, 6]
+        sanitizer: ['address;undefined', 'thread']
+        include:
+          - sanitizer: 'address;undefined'
+            sanitizer_name: ASan+UBSan
+          - sanitizer: 'thread'
+            sanitizer_name: TSan
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.qt }}" = "5" ]; then
+            sudo apt-get install -y build-essential cmake ninja-build \
+              qtbase5-dev libqt5sql5-sqlite qt5-image-formats-plugins
+          else
+            sudo apt-get install -y build-essential cmake ninja-build \
+              qt6-base-dev libqt6sql6-sqlite qt6-image-formats-plugins libgl-dev
+          fi
+
+      # TSan's shadow memory layout does not support the 32-bit mmap
+      # randomisation newer runner kernels use.
+      - name: Reduce ASLR entropy for TSan
+        if: matrix.sanitizer == 'thread'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: |
+          cmake -B build -S . -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DQT_DIR=/usr/lib/x86_64-linux-gnu/cmake/Qt${{ matrix.qt }} \
+            -DOMNIVIEW_WARNINGS=ON \
+            "-DOMNIVIEW_SANITIZE=${{ matrix.sanitizer }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # Suppression files (tools/sanitizers/) only cover uninstrumented Qt
+      # libraries; any report in OmniView code fails the job.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
