@@ -43,7 +43,7 @@ private slots:
     void onFolderSearchChanged(const QString& text);
 
     void onScanProgress(int count);
-    void onScanFinished(int totalCount, const Stats& stats);
+    void onScanFinished(int totalCount, const Stats& stats, const QString& error);
 
     void onFsDirectoryChanged(const QString& path);
     void onFsTimeout();

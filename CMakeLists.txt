@@ -122,3 +122,4 @@ set_tests_properties(OmniViewTests PROPERTIES ENVIRONMENT "${OMNIVIEW_TEST_ENV}"
 
 omniview_add_test(database_regression_tests tests/test_database_regressions.cpp)
 omniview_add_test(imaging_tests             tests/test_imaging.cpp)
+omniview_add_test(zip_scanner_tests         tests/test_zip_scanner.cpp)

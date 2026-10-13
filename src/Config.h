@@ -21,8 +21,15 @@ public:
     static QString legacyDbPath();
 
     static void ensureDirectories();
+    // Snapshot of the legacy pixiv_gallery index (WAL included) into targetDb.
+    static bool migrateLegacyDatabase(const QString& legacyDb, const QString& targetDb);
     static bool isSupportedExtension(const QString& ext);
+    // Where an existing thumbnail for sourcePath can be read from: the shared
+    // {sha256[:24]}.webp if present, else a legacy MD5 thumbnail, else the
+    // shared path. Use canonicalThumbPath() for writing.
     static QString getThumbPath(const QString& sourcePath);
+    // The shared cache file name: thumbnails/{sha256(utf8 path)[:24]}.webp.
+    static QString canonicalThumbPath(const QString& sourcePath);
 
     static constexpr int DEFAULT_GRID_SIZE = 220;
     static constexpr int MIN_GRID_SIZE = 110;

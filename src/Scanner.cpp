@@ -8,12 +8,18 @@
 #include <QDateTime>
 #include <QDebug>
 
+#include <utility>
+
 namespace OmniView {
 
-Scanner::Scanner(const QString& rootDir, const QString& dbPath, QObject* parent)
+namespace {
+constexpr int kBatchSize = 500;
+}
+
+Scanner::Scanner(QString rootDir, QString dbPath, QObject* parent)
     : QThread(parent)
-    , m_rootDir(rootDir)
-    , m_dbPath(dbPath)
+    , m_rootDir(std::move(rootDir))
+    , m_dbPath(std::move(dbPath))
 {
 }
 
@@ -28,63 +34,84 @@ void Scanner::cancel() {
 
 void Scanner::run() {
     if (m_rootDir.isEmpty() || !QDir(m_rootDir).exists()) {
-        emit finished(0, Stats());
+        if (!m_cancelled.load()) {
+            emit scanFinished(0, Stats(), QStringLiteral("Folder does not exist: %1").arg(m_rootDir));
+        }
         return;
     }
 
     Database db(m_dbPath);
     QVector<ImageRecord> batch;
-    batch.reserve(500);
+    batch.reserve(kBatchSize);
+    ScanObservation observation;
     int count = 0;
+    QString error;
 
     const QDir rootQDir(m_rootDir);
     const QString absRoot = rootQDir.absolutePath();
 
+    auto flush = [&]() -> bool {
+        if (batch.isEmpty()) return true;
+        if (!db.batchSyncFiles(batch)) {
+            error = QStringLiteral("Database write failed: %1").arg(db.lastError());
+            return false;
+        }
+        batch.clear();
+        emit progress(count);
+        return true;
+    };
+
+    auto add = [&](ImageRecord rec) -> bool {
+        observation.seenPaths.insert(rec.path);
+        batch.append(std::move(rec));
+        ++count;
+        return batch.size() < kBatchSize || flush();
+    };
+
+    // Symlinks are not followed, which also rules out symlink loops.
     QDirIterator it(absRoot, QDir::Files | QDir::NoSymLinks, QDirIterator::Subdirectories);
 
-    while (it.hasNext() && !m_cancelled.load()) {
+    while (it.hasNext() && !m_cancelled.load() && error.isEmpty()) {
         it.next();
         const QFileInfo fi = it.fileInfo();
         const QString fname = fi.fileName();
 
-        if (fname.startsWith('.')) continue;
+        if (fname.startsWith(QLatin1Char('.'))) continue;
 
         const QString relPath = rootQDir.relativeFilePath(fi.absolutePath());
-        if (relPath.startsWith('.') && relPath != QStringLiteral(".")) continue;
+        if (relPath.startsWith(QLatin1Char('.')) && relPath != QStringLiteral(".")) continue;
         if (relPath.contains(QStringLiteral("/."))) continue;
+        const QString subfolder = (relPath == QStringLiteral(".")) ? QString() : relPath;
 
         const QString suffix = QStringLiteral(".") + fi.suffix().toLower();
 
-        // Check for ZIP archives
         if (suffix == QStringLiteral(".zip")) {
-            const QString relZip = (relPath == QStringLiteral(".")) ? fname : (relPath + QStringLiteral("/") + fname);
+            const QString zipAbs = fi.absoluteFilePath();
+            const QString relZip = subfolder.isEmpty() ? fname : (subfolder + QStringLiteral("/") + fname);
             const QString zipStem = fi.completeBaseName();
             const QString zipDirPath = fi.absolutePath();
-            const QVector<ZipImageEntry> zipEntries = ZipUtils::listZipImages(fi.absoluteFilePath());
+            bool opened = false;
+            const QVector<ZipImageEntry> zipEntries = ZipUtils::listZipImages(zipAbs, &opened);
+            if (opened) {
+                observation.listedArchives.insert(zipAbs);
+            }
 
             for (const auto& ze : zipEntries) {
                 if (m_cancelled.load()) break;
 
-                // Prioritize raw extracted files: skip if raw counterpart exists
-                if (ZipUtils::isDuplicateOfRaw(zipDirPath, zipStem, ze.innerPath)) {
+                // Prefer the raw extracted copy when one exists.
+                if (ZipUtils::isDuplicateOfRaw(zipDirPath, zipStem, ze.innerPath, ze.uncompressedSize)) {
                     continue;
                 }
 
                 ImageRecord rec;
-                rec.path = ZipUtils::makeZipPath(fi.absoluteFilePath(), ze.innerPath);
+                rec.path = ZipUtils::makeZipPath(zipAbs, ze.innerPath);
                 rec.filename = QFileInfo(ze.innerPath).fileName();
                 rec.subfolder = relZip;
                 rec.fileSize = ze.uncompressedSize;
-                rec.mtime = (ze.mtime > 0) ? static_cast<double>(ze.mtime) : static_cast<double>(fi.lastModified().toSecsSinceEpoch());
-
-                batch.append(rec);
-                count++;
-
-                if (batch.size() >= 500) {
-                    db.batchSyncFiles(batch);
-                    batch.clear();
-                    emit progress(count);
-                }
+                rec.mtime = (ze.mtime > 0) ? static_cast<double>(ze.mtime)
+                                           : static_cast<double>(fi.lastModified().toSecsSinceEpoch());
+                if (!add(std::move(rec))) break;
             }
             continue;
         }
@@ -94,31 +121,27 @@ void Scanner::run() {
         ImageRecord rec;
         rec.path = fi.absoluteFilePath();
         rec.filename = fname;
-        rec.subfolder = (relPath == QStringLiteral(".")) ? QStringLiteral("") : relPath;
+        rec.subfolder = subfolder.isNull() ? QStringLiteral("") : subfolder;
         rec.fileSize = fi.size();
         rec.mtime = static_cast<double>(fi.lastModified().toSecsSinceEpoch());
-
-        batch.append(rec);
-        count++;
-
-        if (batch.size() >= 500) {
-            db.batchSyncFiles(batch);
-            batch.clear();
-            emit progress(count);
-        }
+        add(std::move(rec));
     }
 
-    if (!batch.isEmpty() && !m_cancelled.load()) {
-        db.batchSyncFiles(batch);
-        emit progress(count);
-    }
+    if (m_cancelled.load()) return;
+    if (error.isEmpty()) flush();
 
-    if (!m_cancelled.load()) {
-        db.pruneMissingFiles(absRoot);
+    // Only prune after a complete walk of a root that still exists: a drive
+    // that disappeared mid-scan must not wipe the index (and favourites).
+    if (error.isEmpty() && QDir(absRoot).exists()) {
+        db.pruneMissingFiles(absRoot, &observation, [this]() { return m_cancelled.load(); });
     }
+    if (m_cancelled.load()) return;
 
     const Stats stats = db.getStats(absRoot);
-    emit finished(count, stats);
+    if (!error.isEmpty()) {
+        qWarning() << "Scan of" << absRoot << "failed:" << error;
+    }
+    emit scanFinished(count, stats, error);
 }
 
 } // namespace OmniView

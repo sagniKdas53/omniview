@@ -751,7 +751,7 @@ void MainWindow::startScan() {
 
     m_scanner = new Scanner(m_currentRootDir, m_db.dbPath(), this);
     connect(m_scanner, &Scanner::progress, this, &MainWindow::onScanProgress);
-    connect(m_scanner, &Scanner::finished, this, &MainWindow::onScanFinished);
+    connect(m_scanner, &Scanner::scanFinished, this, &MainWindow::onScanFinished);
     m_scanner->start();
 }
 
@@ -759,7 +759,7 @@ void MainWindow::onScanProgress(int count) {
     m_lblStats->setText(QStringLiteral("Found %1 images...").arg(count));
 }
 
-void MainWindow::onScanFinished(int totalCount, const Stats& stats) {
+void MainWindow::onScanFinished(int totalCount, const Stats& stats, const QString& /*error*/) {
     const double gb = static_cast<double>(stats.totalBytes) / (1024.0 * 1024.0 * 1024.0);
     m_lblStats->setText(QStringLiteral("Total: %1 images (%2 GB)")
         .arg(totalCount)
@@ -824,7 +824,7 @@ void MainWindow::refreshFolderList() {
     const QString filterText = m_folderSearch->text().trimmed().toLower();
     for (const auto& pair : subfolders) {
         QString label;
-        if (pair.first == QStringLiteral("__root__")) {
+        if (pair.first.isEmpty()) {
             label = QStringLiteral("📁 Root Folder (%1)").arg(pair.second);
         } else {
             label = QStringLiteral("📁 %1 (%2)").arg(pair.first).arg(pair.second);
@@ -835,7 +835,7 @@ void MainWindow::refreshFolderList() {
         }
 
         auto* item = new QListWidgetItem(label, m_folderList);
-        item->setData(Qt::UserRole, pair.first);
+        item->setData(Qt::UserRole, pair.first.isEmpty() ? QStringLiteral("__root__") : pair.first);
     }
 
     // Preserve selection
@@ -852,7 +852,12 @@ void MainWindow::refreshFolderList() {
 void MainWindow::refreshGallery() {
     QueryFilter filter;
     filter.rootDir = m_currentRootDir;
-    filter.subfolder = m_selectedSubfolder;
+    if (m_selectedSubfolder == QStringLiteral("__root__")) {
+        filter.folderScope = FolderScope::Root;
+    } else if (m_selectedSubfolder != QStringLiteral("__all__") && m_selectedSubfolder != QStringLiteral("__fav__")) {
+        filter.folderScope = FolderScope::Subfolder;
+        filter.subfolder = m_selectedSubfolder;
+    }
     filter.colorName = m_selectedColor;
     filter.aspectType = m_selectedAspect;
     filter.searchTerm = m_searchTerm;

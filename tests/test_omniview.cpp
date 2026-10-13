@@ -293,9 +293,8 @@ private slots:
         QVERIFY(db.initSchema());
 
         Scanner scanner(root, dbPath);
-        QSignalSpy finishedSpy(&scanner, &Scanner::finished);
         scanner.start();
-        QVERIFY(finishedSpy.wait(5000));
+        QVERIFY(scanner.wait(5000));
 
         // Total scanned should be:
         // - raw_only.png (raw file)
@@ -342,9 +341,8 @@ private slots:
         QVERIFY(db.initSchema());
 
         Scanner scanner(pixivDir, dbPath);
-        QSignalSpy finishedSpy(&scanner, &Scanner::finished);
         scanner.start();
-        QVERIFY(finishedSpy.wait(30000));
+        QVERIFY(scanner.wait(30000));
         scanner.wait();
 
         QueryFilter filter;

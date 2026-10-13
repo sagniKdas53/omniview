@@ -5,6 +5,10 @@
 #include <QFileInfo>
 #include <QCryptographicHash>
 #include <QStandardPaths>
+#include <QDebug>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 
 namespace OmniView {
 
@@ -21,7 +25,7 @@ QString Config::appTitle() {
 }
 
 QString Config::defaultRootDir() {
-    const QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     if (!pictures.isEmpty() && QDir(pictures).exists()) {
         return pictures;
     }
@@ -54,6 +58,38 @@ QString Config::legacyDbPath() {
     return QDir::homePath() + QStringLiteral("/.cache/pixiv_gallery/pixiv_index.db");
 }
 
+bool Config::migrateLegacyDatabase(const QString& legacyDb, const QString& targetDb) {
+    // Copy through SQLite (VACUUM INTO) rather than QFile::copy: a plain copy
+    // misses committed changes still in the legacy -wal file and can be torn
+    // if the legacy app is writing. Write to a temp name, then rename.
+    const QString tmp = targetDb + QStringLiteral(".migrating");
+    QFile::remove(tmp);
+    const QString conn = QStringLiteral("omniview_legacy_migration");
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        db.setDatabaseName(legacyDb);
+        db.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=5000"));
+        if (db.open()) {
+            QSqlQuery q(db);
+            q.prepare(QStringLiteral("VACUUM INTO ?"));
+            q.addBindValue(tmp);
+            ok = q.exec();
+            if (!ok) {
+                qWarning() << "Legacy database migration failed:" << q.lastError().text();
+            }
+            q.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(conn);
+    if (!ok || !QFile::rename(tmp, targetDb)) {
+        QFile::remove(tmp);
+        return false;
+    }
+    return true;
+}
+
 void Config::ensureDirectories() {
     QDir().mkpath(cacheDir());
     QDir().mkpath(thumbnailsDir());
@@ -61,8 +97,8 @@ void Config::ensureDirectories() {
     // Legacy DB migration if omniview DB does not exist
     const QString targetDb = dbPath();
     const QString legacyDb = legacyDbPath();
-    if (!QFile::exists(targetDb) && QFile::exists(legacyDb)) {
-        QFile::copy(legacyDb, targetDb);
+    if (qEnvironmentVariableIsEmpty("OMNIVIEW_CACHE_DIR") && !QFile::exists(targetDb) && QFile::exists(legacyDb)) {
+        migrateLegacyDatabase(legacyDb, targetDb);
     }
 }
 
@@ -78,36 +114,38 @@ bool Config::isSupportedExtension(const QString& ext) {
     return supported.contains(ext.toLower());
 }
 
+QString Config::canonicalThumbPath(const QString& sourcePath) {
+    const QByteArray sha = QCryptographicHash::hash(sourcePath.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return thumbnailsDir() + QStringLiteral("/") + QString::fromLatin1(sha.left(24)) + QStringLiteral(".webp");
+}
+
 QString Config::getThumbPath(const QString& sourcePath) {
-    const QByteArray utf8 = sourcePath.toUtf8();
-
-    // 1. Standard SHA-256 WebP path
-    const QString sha256Hex = QString::fromUtf8(QCryptographicHash::hash(utf8, QCryptographicHash::Sha256).toHex());
-    const QString sha256Prefix = sha256Hex.left(24);
-    const QString standardWebp = thumbnailsDir() + QStringLiteral("/") + sha256Prefix + QStringLiteral(".webp");
-
+    // 1. Standard SHA-256 WebP path (shared with the Python and Rust versions)
+    QString standardWebp = canonicalThumbPath(sourcePath);
     if (QFile::exists(standardWebp)) {
         return standardWebp;
     }
 
-    // 2. Check legacy MD5 WebP
-    const QString md5Hex = QString::fromUtf8(QCryptographicHash::hash(utf8, QCryptographicHash::Md5).toHex());
-    const QString md5Webp = thumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".webp");
+    // 2. Legacy MD5 WebP / JPG in the current cache
+    const QString md5Hex = QString::fromLatin1(
+        QCryptographicHash::hash(sourcePath.toUtf8(), QCryptographicHash::Md5).toHex());
+    QString md5Webp = thumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".webp");
     if (QFile::exists(md5Webp)) {
         return md5Webp;
     }
-
-    // 3. Check legacy JPG (both in current and legacy cache folder)
-    const QString currentJpg = thumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".jpg");
+    QString currentJpg = thumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".jpg");
     if (QFile::exists(currentJpg)) {
         return currentJpg;
     }
-    const QString legacyJpg = legacyThumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".jpg");
-    if (QFile::exists(legacyJpg)) {
-        return legacyJpg;
+
+    // 3. The legacy pixiv_gallery cache, unless a separate cache was requested.
+    if (qEnvironmentVariableIsEmpty("OMNIVIEW_CACHE_DIR")) {
+        QString legacyJpg = legacyThumbnailsDir() + QStringLiteral("/") + md5Hex + QStringLiteral(".jpg");
+        if (QFile::exists(legacyJpg)) {
+            return legacyJpg;
+        }
     }
 
-    // Default to standard SHA-256 WebP
     return standardWebp;
 }
 
