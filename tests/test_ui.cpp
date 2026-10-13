@@ -284,6 +284,99 @@ private slots:
         QCOMPARE(f.view.getSelectedRows(), (QVector<int>{1, 3, 5}));
     }
 
+    // Regression: stray clicks / tiny drags in batch mode selected hundreds
+    // of cards. Batch must only ever grow by what the user deliberately
+    // covers, never be replaced.
+    void strayDragOnEmptySpaceKeepsBatch() {
+        ViewFixture f(300);
+        f.view.setSelectMode(true);
+        auto* sel = f.view.selectionModel();
+        for (int r : {2, 5, 9}) sel->select(f.model.index(r, 0), QItemSelectionModel::Select);
+        auto* vp = f.view.viewport();
+        // A point in the spacing between two cards of the first row.
+        const QRect r0 = f.view.visualRect(f.model.index(0, 0));
+        const QPoint gap(r0.right() + 4, r0.center().y());
+        QVERIFY(!f.view.indexAt(gap).isValid());
+        sendMouse(vp, QEvent::MouseButtonPress, gap, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, gap + QPoint(2, 3), Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, gap + QPoint(4, 6), Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, gap + QPoint(4, 6), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(f.view.getSelectedRows(), (QVector<int>{2, 5, 9}));
+    }
+
+    void deliberateRubberBandInBatchModeAdds() {
+        ViewFixture f(300);
+        f.view.setSelectMode(true);
+        f.view.selectionModel()->select(f.model.index(9, 0), QItemSelectionModel::Select);
+        auto* vp = f.view.viewport();
+        const QRect r0 = f.view.visualRect(f.model.index(0, 0));
+        const QRect r1 = f.view.visualRect(f.model.index(1, 0));
+        const QPoint start(r0.right() + 4, r0.top() + 2);   // gap left of card 1
+        const QPoint end(r1.center());                        // over card 1 only
+        sendMouse(vp, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, (start + end) / 2, Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(f.view.getSelectedRows(), (QVector<int>{1, 9}));
+    }
+
+    void dragAfterDoubleClickDoesNotUseStalePressPosition() {
+        ViewFixture f(300);
+        auto* vp = f.view.viewport();
+        // A normal click at the top (the base class remembers this press).
+        sendMouse(vp, QEvent::MouseButtonPress, centerOf(f.view, 0), Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, centerOf(f.view, 0), Qt::LeftButton, Qt::NoButton);
+        f.view.setSelectMode(true);
+        f.view.clearAllSelection();
+        f.view.scrollTo(f.model.index(250, 0));
+        QCoreApplication::processEvents();
+        const QPoint p = centerOf(f.view, 250);
+        QVERIFY(vp->rect().contains(p));
+        // Stray double click on a card, mouse moves a little before release.
+        sendMouse(vp, QEvent::MouseButtonPress, p, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, p, Qt::LeftButton, Qt::NoButton);
+        sendMouse(vp, QEvent::MouseButtonDblClick, p, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, p + QPoint(3, 2), Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, p + QPoint(3, 2), Qt::LeftButton, Qt::NoButton);
+        QVERIFY2(f.view.getSelectedRows().size() <= 1,
+                 qPrintable(QStringLiteral("%1 cards selected").arg(f.view.getSelectedRows().size())));
+    }
+
+    void normalModeRubberBandStillWorks() {
+        ViewFixture f(300);
+        auto* vp = f.view.viewport();
+        f.view.selectionModel()->select(f.model.index(9, 0), QItemSelectionModel::Select);
+        const QRect r0 = f.view.visualRect(f.model.index(0, 0));
+        const QRect r1 = f.view.visualRect(f.model.index(1, 0));
+        const QPoint start(r0.right() + 4, r0.top() + 2);
+        sendMouse(vp, QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, r1.center(), Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, r1.center(), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(f.view.getSelectedRows(), QVector<int>{1}); // standard: band replaces
+        // And a plain click on a card selects just that card.
+        sendMouse(vp, QEvent::MouseButtonPress, centerOf(f.view, 4), Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, centerOf(f.view, 4), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(f.view.getSelectedRows(), QVector<int>{4});
+    }
+
+    void normalModeDoubleClickWobbleIsHarmless() {
+        ViewFixture f(300);
+        auto* vp = f.view.viewport();
+        sendMouse(vp, QEvent::MouseButtonPress, centerOf(f.view, 0), Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, centerOf(f.view, 0), Qt::LeftButton, Qt::NoButton);
+        f.view.scrollTo(f.model.index(250, 0));
+        QCoreApplication::processEvents();
+        const QPoint p = centerOf(f.view, 250);
+        QSignalSpy open(&f.view, &GalleryView::openViewerRequested);
+        sendMouse(vp, QEvent::MouseButtonPress, p, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, p, Qt::LeftButton, Qt::NoButton);
+        sendMouse(vp, QEvent::MouseButtonDblClick, p, Qt::LeftButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseMove, p + QPoint(3, 2), Qt::NoButton, Qt::LeftButton);
+        sendMouse(vp, QEvent::MouseButtonRelease, p + QPoint(3, 2), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(open.count(), 1);
+        QCOMPARE(f.view.getSelectedRows(), QVector<int>{250});
+    }
+
     void favouriteShortcutRequiresNoModifiers() {
         ViewFixture f(3);
         f.view.setCurrentIndex(f.model.index(1, 0));

@@ -225,9 +225,29 @@ void GalleryView::resetPressState() {
     m_pressActive = false;
     m_pressConsumed = false;
     m_pressAdditive = false;
+    m_bandPending = false;
+    m_baseOwnsPress = false;
     m_pressIndex = QPersistentModelIndex();
     m_pendingToggleOnRelease = QPersistentModelIndex();
     m_pendingSingleSelectOnRelease = QPersistentModelIndex();
+}
+
+void GalleryView::forwardToBase(QMouseEvent* event, bool additive) {
+    if (!additive) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: QListView::mousePressEvent(event); break;
+        case QEvent::MouseMove: QListView::mouseMoveEvent(event); break;
+        case QEvent::MouseButtonRelease: QListView::mouseReleaseEvent(event); break;
+        default: break;
+        }
+        return;
+    }
+    // Qt derives the selection command from every event's modifiers, so the
+    // press, each move and the release must all carry Ctrl for the rubber
+    // band to add to the batch instead of replacing it.
+    QMouseEvent copy(event->type(), localPosOf(event), globalPosOf(event),
+                     event->button(), event->buttons(), event->modifiers() | Qt::ControlModifier);
+    forwardToBase(&copy, false);
 }
 
 void GalleryView::mousePressEvent(QMouseEvent* event) {
@@ -240,6 +260,7 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
     }
 
     if (event->button() != Qt::LeftButton) {
+        resetPressState();
         QListView::mousePressEvent(event);
         return;
     }
@@ -261,13 +282,10 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
             viewport()->update();
             return;
         }
-        // Empty space in batch mode: rubber-band *adds* to the batch instead
-        // of replacing it (a stray click between cards must not wipe it).
+        // Empty space in batch mode: nothing happens for a click or a small
+        // wobble; past the drag distance a rubber band *adds* to the batch.
         m_pressAdditive = true;
-        QMouseEvent additive(event->type(), localPosOf(event), globalPosOf(event),
-                             event->button(), event->buttons(),
-                             event->modifiers() | Qt::ControlModifier);
-        QListView::mousePressEvent(&additive);
+        m_bandPending = true;
         return;
     }
 
@@ -281,6 +299,7 @@ void GalleryView::mousePressEvent(QMouseEvent* event) {
             return;
         }
     }
+    m_baseOwnsPress = true;
     QListView::mousePressEvent(event);
 }
 
@@ -321,16 +340,35 @@ void GalleryView::mouseMoveEvent(QMouseEvent* event) {
             // must not start a rubber band that replaces the selection.
             return;
         }
-    } else if (m_pressActive && m_pressConsumed) {
+    }
+
+    if (m_bandPending) {
+        if ((event->pos() - m_dragStartPos).manhattanLength() < QApplication::startDragDistance()) {
+            return; // stray wobble on empty space
+        }
+        m_bandPending = false;
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(m_dragStartPos),
+                          QPointF(viewport()->mapToGlobal(m_dragStartPos)),
+                          Qt::LeftButton, Qt::LeftButton, event->modifiers());
+        forwardToBase(&press, true);
+        m_baseOwnsPress = true;
+    }
+
+    if (!m_baseOwnsPress) {
+        // The button is down but QListView did not see this gesture's press
+        // (we consumed it, it was a double-click, or it started elsewhere):
+        // its remembered press position is stale and would select every card
+        // between there and the cursor.
         return;
     }
-    QListView::mouseMoveEvent(event);
+    forwardToBase(event, m_pressAdditive);
 }
 
 void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         const bool consumed = m_pressConsumed;
         const bool additive = m_pressAdditive;
+        const bool baseOwnsPress = m_baseOwnsPress;
         if (m_pendingToggleOnRelease.isValid() && selectionModel()) {
             selectionModel()->select(m_pendingToggleOnRelease, QItemSelectionModel::Deselect);
             selectionModel()->setCurrentIndex(m_pendingToggleOnRelease, QItemSelectionModel::NoUpdate);
@@ -345,11 +383,12 @@ void GalleryView::mouseReleaseEvent(QMouseEvent* event) {
             setState(QAbstractItemView::NoState);
             return;
         }
-        if (additive) {
-            QMouseEvent additiveRelease(event->type(), localPosOf(event), globalPosOf(event),
-                                        event->button(), event->buttons(),
-                                        event->modifiers() | Qt::ControlModifier);
-            QListView::mouseReleaseEvent(&additiveRelease);
+        if (!baseOwnsPress || additive) {
+            if (baseOwnsPress) {
+                forwardToBase(event, true); // finish the additive rubber band
+            }
+            // Otherwise QListView never saw the press: a release would act on
+            // its stale press state.
             setState(QAbstractItemView::NoState);
             return;
         }

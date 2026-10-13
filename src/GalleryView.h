@@ -65,6 +65,7 @@ private:
     const GalleryModel* galleryModel() const;
     void startDragForIndex(const QModelIndex& index);
     void resetPressState();
+    void forwardToBase(QMouseEvent* event, bool additive);
     void emitSelectionCount();
     void rememberSelection();
     void restoreSelection();
@@ -74,6 +75,11 @@ private:
     bool m_pressActive = false;          // a left press is in progress
     bool m_pressConsumed = false;        // ...and this view handled it itself
     bool m_pressAdditive = false;        // ...on empty space in batch mode
+    bool m_bandPending = false;          // batch-mode band not started yet (below drag distance)
+    // QListView saw this gesture's press. Only then may it see the moves:
+    // it builds rubber-band rectangles from the last press *it* received,
+    // which is stale (possibly hundreds of rows away) when we consumed it.
+    bool m_baseOwnsPress = false;
     QPersistentModelIndex m_pressIndex;  // card under the press, for dragging
     QPersistentModelIndex m_pendingToggleOnRelease;
     QPersistentModelIndex m_pendingSingleSelectOnRelease;
