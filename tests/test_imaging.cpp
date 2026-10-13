@@ -285,6 +285,22 @@ private slots:
         QVERIFY(thumb.width() <= 256 && thumb.height() <= 256);
     }
 
+    void hugeImageWithUnreducedBoxIsRejected() {
+        // A box at least as large as the image means a full-size decode, so
+        // the relaxed limit for reduced decodes must not apply.
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("huge.jpg"));
+        {
+            QImage img(8200, 8200, QImage::Format_Grayscale8);
+            QVERIFY(!img.isNull());
+            img.fill(128);
+            QVERIFY(img.save(src, "JPEG", 50));
+        }
+        QString error;
+        QVERIFY(ColorUtils::loadImage(src, QSize(9000, 9000), nullptr, &error).isNull());
+        QVERIFY2(error.contains(QStringLiteral("too large")), qPrintable(error));
+    }
+
     void hugeImageWithoutReducedDecodeIsRejected() {
         QTemporaryDir tmp;
         const QString src = tmp.filePath(QStringLiteral("huge.png"));

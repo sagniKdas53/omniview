@@ -184,11 +184,23 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
     reader.setAutoTransform(true);
 
     const QSize storedSize = reader.size();
-    // JPEG (libjpeg, up to 1/8 per side) and WebP decode straight to the
-    // reduced size, so they may take larger sources. Other handlers that
-    // advertise ScaledSize (e.g. PNG) decode in full and scale afterwards.
+
+    // Decode straight to the bounding box when the image exceeds it.
+    QSize scaledSize;
+    if (boundingBox.isValid() && storedSize.isValid()
+        && (storedSize.width() > boundingBox.width() || storedSize.height() > boundingBox.height())) {
+        // The box is used for both orientations, so make it square.
+        const int side = qMax(boundingBox.width(), boundingBox.height());
+        scaledSize = storedSize.scaled(side, side, Qt::KeepAspectRatio);
+    }
+
+    // JPEG (libjpeg, up to 1/8 per side) and WebP decode straight to a
+    // reduced size, so they may take larger sources as long as the reduced
+    // output itself fits the cap. Other handlers that advertise ScaledSize
+    // (e.g. PNG) decode in full and scale afterwards.
     const QByteArray format = reader.format();
-    const bool decodesReduced = boundingBox.isValid()
+    const bool decodesReduced = scaledSize.isValid()
+        && static_cast<qint64>(scaledSize.width()) * scaledSize.height() <= MAX_IMAGE_PIXELS
         && (format == "jpeg" || format == "jpg" || format == "webp");
     const qint64 pixelLimit = decodesReduced ? MAX_IMAGE_PIXELS * 64 : MAX_IMAGE_PIXELS;
     if (storedSize.isValid()
@@ -203,11 +215,8 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
         orientedSize.transpose();
     }
 
-    if (boundingBox.isValid() && storedSize.isValid()
-        && (storedSize.width() > boundingBox.width() || storedSize.height() > boundingBox.height())) {
-        // The box is used for both orientations, so make it square.
-        const int side = qMax(boundingBox.width(), boundingBox.height());
-        reader.setScaledSize(storedSize.scaled(side, side, Qt::KeepAspectRatio));
+    if (scaledSize.isValid()) {
+        reader.setScaledSize(scaledSize);
     }
 
     QImage img = reader.read();
