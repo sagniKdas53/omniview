@@ -73,6 +73,14 @@ void ThumbnailTask::run() {
         }
     }
 
+    // Known not to decode (possibly from an earlier session): report the
+    // failure without decoding again until the file changes.
+    if (db.hasDecodeFailure(m_sourcePath, rec.mtime, rec.fileSize)) {
+        manager->taskFinished(m_sourcePath, ImageFeatures(), ThumbnailManager::Outcome::Failed,
+                                rec.mtime, rec.fileSize);
+        return;
+    }
+
     // Always write the canonical shared-cache location; legacy paths are read-only.
     ImageFeatures feat = ColorUtils::generateThumbnailAndFeatures(
         m_sourcePath, Config::canonicalThumbPath(m_sourcePath),
@@ -80,6 +88,9 @@ void ThumbnailTask::run() {
     );
 
     if (!feat.valid) {
+        if (feat.decodeFailed) {
+            db.recordDecodeFailure(m_sourcePath, rec.mtime, rec.fileSize);
+        }
         manager->taskFinished(m_sourcePath, feat, ThumbnailManager::Outcome::Failed,
                                 rec.mtime, rec.fileSize);
         return;

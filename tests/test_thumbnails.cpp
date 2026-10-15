@@ -124,6 +124,38 @@ private slots:
         QTRY_COMPARE(ready.count(), 2);
     }
 
+    void failedImagesAreNotRetriedInLaterSessions() {
+        QTemporaryDir tmp;
+        Database db(tmp.filePath(QStringLiteral("index.db")));
+        QVERIFY(db.initSchema());
+        const QString broken = tmp.filePath(QStringLiteral("broken.png"));
+        QFile f(broken);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("\x89PNG\r\n\x1a\nnot-really");
+        f.close();
+        ImageRecord rec;
+        rec.path = broken;
+        rec.filename = QStringLiteral("broken.png");
+        rec.fileSize = 18;
+        rec.mtime = 5.0;
+        QVERIFY(db.batchSyncFiles({rec}));
+        {
+            ThumbnailManager first(db.dbPath());
+            QSignalSpy ready(&first, &ThumbnailManager::thumbnailReady);
+            first.requestPriorityThumbnail(broken);
+            QTRY_COMPARE(ready.count(), 1);
+            QVERIFY(first.hasFailed(broken));
+        }
+        ThumbnailManager second(db.dbPath()); // the app was restarted
+        second.startBackgroundIndexing();
+        QCOMPARE(second.pendingCount(), 0);
+        QSignalSpy ready(&second, &ThumbnailManager::thumbnailReady);
+        second.requestPriorityThumbnail(broken); // a visible card
+        QTRY_COMPARE(ready.count(), 1);
+        QVERIFY(!ready.first().at(2).value<ImageFeatures>().valid);
+        QVERIFY(second.hasFailed(broken));
+    }
+
     void corruptCachedThumbnailIsRegenerated() {
         QTemporaryDir tmp;
         Database db(tmp.filePath(QStringLiteral("index.db")));

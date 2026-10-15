@@ -239,6 +239,7 @@ private slots:
         QVERIFY(noise(20, 20, 3).save(src));
         const ImageFeatures feat = ColorUtils::generateThumbnailAndFeatures(src, tmp.filePath(QStringLiteral("a.webp")), QSize(0, 0));
         QVERIFY(!feat.valid);
+        QVERIFY(!feat.decodeFailed);
     }
 
     void thumbnailReplacesExistingFileAtomically() {
@@ -343,6 +344,25 @@ private slots:
         QCOMPARE(ColorUtils::decodePixelLimit("jpeg", true, QSize(9000, 9000)), ColorUtils::MAX_IMAGE_PIXELS);
     }
 
+    void imageWithUnknownSizeIsRejectedOnQt5() {
+        // ICNS reports no size before decoding. Qt 6's allocation limit bounds
+        // the decode; Qt 5 has none, so there the image must be refused.
+        QVERIFY2(QImageReader::supportedImageFormats().contains("icns"),
+                 "Prerequisite: the Qt image-formats plugins (ICNS) must be installed");
+        QTemporaryDir tmp;
+        const QString src = tmp.filePath(QStringLiteral("disguised.png"));
+        QVERIFY(noise(40, 30, 7).save(src, "ICNS"));
+        QVERIFY(!QImageReader(src).size().isValid());
+        QString error;
+        const QImage img = ColorUtils::loadImage(src, QSize(256, 256), nullptr, &error);
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        QVERIFY(img.isNull());
+        QVERIFY2(error.contains(QStringLiteral("size")), qPrintable(error));
+#else
+        QVERIFY2(!img.isNull(), qPrintable(error));
+#endif
+    }
+
     void undecodableSourceReportsError() {
         QTemporaryDir tmp;
         const QString src = tmp.filePath(QStringLiteral("broken.png"));
@@ -353,7 +373,9 @@ private slots:
         QString error;
         QVERIFY(ColorUtils::loadImage(src, QSize(), nullptr, &error).isNull());
         QVERIFY(!error.isEmpty());
-        QVERIFY(!ColorUtils::generateThumbnailAndFeatures(src, tmp.filePath(QStringLiteral("b.webp"))).valid);
+        const ImageFeatures feat = ColorUtils::generateThumbnailAndFeatures(src, tmp.filePath(QStringLiteral("b.webp")));
+        QVERIFY(!feat.valid);
+        QVERIFY(feat.decodeFailed);
     }
 };
 

@@ -14,7 +14,16 @@ public:
     static QString appTitle();
     static QString defaultRootDir();
 
+    // OMNIVIEW_CACHE_DIR if set, else defaultCacheDir().
     static QString cacheDir();
+    // ~/.cache/omniview on every platform (the location the Rust version uses).
+    static QString defaultCacheDir();
+    // Where earlier C++ builds kept the cache: Qt's GenericCacheLocation, which
+    // differs from defaultCacheDir() on macOS, Windows and with XDG_CACHE_HOME.
+    static QString previousDefaultCacheDir();
+    // Moves (or, if that is impossible, copies) a cache from `from` to `to`
+    // and rewrites stored thumbnail paths. Refuses to overwrite an index.
+    static bool migrateCacheDir(const QString& from, const QString& to);
     static QString thumbnailsDir();
     static QString legacyThumbnailsDir();
     static QString dbPath();

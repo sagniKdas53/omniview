@@ -1,6 +1,7 @@
 #include "Config.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QCryptographicHash>
@@ -35,11 +36,79 @@ QString Config::defaultRootDir() {
 QString Config::cacheDir() {
     const QString overrideDir = qEnvironmentVariable("OMNIVIEW_CACHE_DIR");
     if (!overrideDir.isEmpty()) return QDir(overrideDir).absolutePath();
-    const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
-    if (!cache.isEmpty()) {
-        return cache + QStringLiteral("/omniview");
-    }
+    return defaultCacheDir();
+}
+
+QString Config::defaultCacheDir() {
     return QDir::homePath() + QStringLiteral("/.cache/omniview");
+}
+
+QString Config::previousDefaultCacheDir() {
+    const QString cache = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+    return cache.isEmpty() ? QString() : cache + QStringLiteral("/omniview");
+}
+
+bool Config::migrateCacheDir(const QString& from, const QString& to) {
+    const QString fromDb = from + QStringLiteral("/omniview_index.db");
+    const QString toDb = to + QStringLiteral("/omniview_index.db");
+    if (!QFile::exists(fromDb) || QFile::exists(toDb)) return false;
+
+    // Same filesystem and a free target: one atomic rename keeps everything
+    // (thumbnails, WAL, extraction cache) without copying.
+    bool moved = false;
+    if (QDir(to).exists() && QDir(to).isEmpty()) {
+        QDir().rmdir(to);
+    }
+    if (!QDir(to).exists()) {
+        QDir().mkpath(QFileInfo(to).absolutePath());
+        moved = QDir().rename(from, to);
+    }
+    if (!moved) {
+        // Different filesystem or target in use: copy the index (through
+        // SQLite, WAL included) and the thumbnails; the old cache stays.
+        if (!QDir().mkpath(to + QStringLiteral("/thumbnails"))
+            || !migrateLegacyDatabase(fromDb, toDb)) {
+            qWarning() << "Could not migrate the cache from" << from << "to" << to;
+            return false;
+        }
+        QDirIterator it(from + QStringLiteral("/thumbnails"), QDir::Files);
+        while (it.hasNext()) {
+            const QString src = it.next();
+            const QString dst = to + QStringLiteral("/thumbnails/") + it.fileName();
+            if (!QFile::exists(dst)) QFile::copy(src, dst);
+        }
+    }
+
+    // Stored thumbnail paths are absolute: point them at the new location.
+    const QString conn = QStringLiteral("omniview_cache_migration");
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        db.setDatabaseName(toDb);
+        db.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=5000"));
+        if (db.open()) {
+            const QString oldPrefix = from + QStringLiteral("/");
+            QSqlQuery q(db);
+            q.prepare(QStringLiteral(
+                "UPDATE images SET thumb_path = ? || substr(thumb_path, length(?) + 1) "
+                "WHERE substr(thumb_path, 1, length(?)) = ?;"));
+            q.addBindValue(to + QStringLiteral("/"));
+            q.addBindValue(oldPrefix);
+            q.addBindValue(oldPrefix);
+            q.addBindValue(oldPrefix);
+            ok = q.exec();
+            if (!ok) {
+                qWarning() << "Could not update thumbnail paths after moving the cache:"
+                           << q.lastError().text();
+            }
+            q.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(conn);
+    // Thumbnails are found by their canonical name either way, so a failed
+    // path update only costs regeneration, never data.
+    return true;
 }
 
 QString Config::thumbnailsDir() {
@@ -91,6 +160,13 @@ bool Config::migrateLegacyDatabase(const QString& legacyDb, const QString& targe
 }
 
 void Config::ensureDirectories() {
+    if (qEnvironmentVariableIsEmpty("OMNIVIEW_CACHE_DIR")) {
+        const QString previous = previousDefaultCacheDir();
+        const QString current = defaultCacheDir();
+        if (!previous.isEmpty() && QDir::cleanPath(previous) != QDir::cleanPath(current)) {
+            migrateCacheDir(previous, current); // no-op unless only the old index exists
+        }
+    }
     QDir().mkpath(cacheDir());
     QDir().mkpath(thumbnailsDir());
 

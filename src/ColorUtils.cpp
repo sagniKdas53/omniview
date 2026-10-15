@@ -196,6 +196,14 @@ QImage ColorUtils::loadImage(const QString& sourcePath, const QSize& boundingBox
     reader.setAutoTransform(true);
 
     const QSize storedSize = reader.size();
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    // Without a size there is no pre-decode bound, and Qt 5 has no allocation
+    // limit either (Qt 6's, set in configureImageIO, still applies there).
+    if (!storedSize.isValid()) {
+        return fail(QStringLiteral("Image size is unknown before decoding (%1)")
+                        .arg(QString::fromLatin1(reader.format())));
+    }
+#endif
 
     // Decode straight to the bounding box when the image exceeds it.
     QSize scaledSize;
@@ -340,6 +348,7 @@ ImageFeatures ColorUtils::generateThumbnailAndFeatures(
     // Decode at up to twice the thumbnail size, then smooth-scale down.
     const QImage img = loadImage(sourcePath, maxSize * 2, &originalSize);
     if (img.isNull()) {
+        feat.decodeFailed = true;
         return feat;
     }
 

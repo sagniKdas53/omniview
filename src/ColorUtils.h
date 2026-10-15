@@ -30,6 +30,9 @@ struct ImageFeatures {
     // Decoded thumbnail, handed to the GUI thread so it never re-reads the file.
     QImage thumbnail;
     bool valid = false;
+    // The source itself could not be decoded (as opposed to e.g. the
+    // thumbnail write failing): only this is remembered across sessions.
+    bool decodeFailed = false;
 };
 
 struct HsvColor {

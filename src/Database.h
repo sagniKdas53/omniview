@@ -87,6 +87,8 @@ public:
 
     bool initSchema();
     bool batchSyncFiles(const QVector<ImageRecord>& entries);
+    // Removes rows whose file is gone. Favourites are kept but hidden
+    // (missing = 1) until a scan sees the file again.
     int pruneMissingFiles(const QString& rootDir,
                           const ScanObservation* observation = nullptr,
                           const std::function<bool()>& isCancelled = {});
@@ -100,6 +102,11 @@ public:
     // decoded; returns Stale when a rescan changed the file in the meantime.
     UpdateResult updateImageFeaturesIfUnchanged(const QString& path, double mtime,
                                                 qint64 fileSize, const ImageFeatures& feat);
+    // Decode failures persist across sessions, keyed to the file version:
+    // getUnindexedPaths() skips them until the file changes, and a later
+    // successful update clears them.
+    bool recordDecodeFailure(const QString& path, double mtime, qint64 fileSize);
+    bool hasDecodeFailure(const QString& path, double mtime, qint64 fileSize);
     bool toggleFavorite(const QString& path, bool* outNewVal = nullptr);
     QVector<ImageRecord> queryImages(const QueryFilter& filter);
     // Subfolder name ("" for the root folder itself) and image count.
@@ -125,6 +132,7 @@ private:
     QSqlDatabase getDatabase();
     void closeConnection();
     bool recoverCorruptDatabase();
+    void clearDecodeFailure(const QString& path);
 
     QString m_dbPath;
     QString m_connectionName;

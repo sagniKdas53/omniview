@@ -22,6 +22,10 @@ std::atomic<quint64> s_connectionCounter{0}; // NOLINT(cppcoreguidelines-avoid-n
 
 const QString kRootRangeClause = QStringLiteral("(path >= ? AND path < ?)");
 
+// Rows of favourites whose file disappeared are kept (hidden) so the
+// favourite comes back with the file; every user-facing query skips them.
+const QString kPresentClause = QStringLiteral("missing = 0");
+
 // A row hashed by builds whose Qt 5 dHash read RGB32 pixels as bytes; every
 // image got this value. Cleared on start-up so it is recomputed.
 const QString kBrokenQt5DHash = QStringLiteral("2222222222222222");
@@ -151,7 +155,8 @@ bool Database::initSchema() {
             "    dhash TEXT DEFAULT '',"
             "    thumb_path TEXT DEFAULT '',"
             "    is_favorite INTEGER DEFAULT 0,"
-            "    indexed INTEGER DEFAULT 0"
+            "    indexed INTEGER DEFAULT 0,"
+            "    missing INTEGER NOT NULL DEFAULT 0"
             ");"
         );
 
@@ -161,8 +166,35 @@ bool Database::initSchema() {
             return false;
         }
 
-        // path already has an index through its PRIMARY KEY.
+        // Additive, idempotent upgrade of databases created before the
+        // "missing" column existed (older builds and the other OmniView
+        // implementations). Existing rows default to present.
+        bool hasMissing = false;
+        if (!q.exec(QStringLiteral("PRAGMA table_info(images);"))) {
+            schemaError = q.lastError().text();
+            schemaNativeCode = q.lastError().nativeErrorCode();
+            return false;
+        }
+        while (q.next()) {
+            hasMissing = hasMissing || q.value(1).toString() == QStringLiteral("missing");
+        }
+        if (!hasMissing
+            && !q.exec(QStringLiteral("ALTER TABLE images ADD COLUMN missing INTEGER NOT NULL DEFAULT 0;"))) {
+            schemaError = q.lastError().text();
+            schemaNativeCode = q.lastError().nativeErrorCode();
+            return false;
+        }
+
+        // path already has an index through its PRIMARY KEY; older databases
+        // also carry a redundant idx_path that only costs write time.
         const QStringList statements = {
+            QStringLiteral("DROP INDEX IF EXISTS idx_path;"),
+            // Images that could not be decoded, keyed to the file version, so
+            // they are not re-decoded on every launch until the file changes.
+            QStringLiteral("CREATE TABLE IF NOT EXISTS decode_failures ("
+                           "    path TEXT PRIMARY KEY,"
+                           "    file_size INTEGER NOT NULL,"
+                           "    mtime REAL NOT NULL);"),
             QStringLiteral("CREATE INDEX IF NOT EXISTS idx_subfolder ON images(subfolder);"),
             QStringLiteral("CREATE INDEX IF NOT EXISTS idx_color ON images(color_name);"),
             QStringLiteral("CREATE INDEX IF NOT EXISTS idx_aspect ON images(aspect_type);"),
@@ -222,7 +254,8 @@ bool Database::batchSyncFiles(const QVector<ImageRecord>& entries) {
     // without discarding their thumbnails and features.
     QSqlQuery rehome(db);
     rehome.prepare(QStringLiteral(
-        "UPDATE images SET subfolder = ?, filename = ? WHERE path = ? AND (subfolder != ? OR filename != ?);"));
+        "UPDATE images SET subfolder = ?, filename = ?, missing = 0 "
+        "WHERE path = ? AND (subfolder != ? OR filename != ? OR missing != 0);"));
 
     QSqlQuery upsert(db);
     upsert.prepare(QStringLiteral(
@@ -278,17 +311,20 @@ int Database::pruneMissingFiles(const QString& rootDir, const ScanObservation* o
 
     const auto range = rootPathRange(absRoot);
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path, file_size FROM images WHERE ") + kRootRangeClause);
+    q.prepare(QStringLiteral("SELECT path, file_size, is_favorite FROM images WHERE ")
+              + kPresentClause + QStringLiteral(" AND ") + kRootRangeClause);
     q.addBindValue(range.first);
     q.addBindValue(range.second);
     if (!q.exec()) return 0;
 
     QHash<QString, bool> archiveExists;
-    QStringList missing;
+    QStringList toDelete;
+    QStringList toHide; // favourites whose file is gone: kept until it returns
     while (q.next()) {
         if (isCancelled && isCancelled()) return 0;
         const QString path = q.value(0).toString();
         const qint64 size = q.value(1).toLongLong();
+        const bool favourite = q.value(2).toInt() == 1;
         QString zipPath, innerPath;
         if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
             auto it = archiveExists.find(zipPath);
@@ -303,16 +339,18 @@ int Database::pruneMissingFiles(const QString& rootDir, const ScanObservation* o
             const bool duplicate = !archiveGone && !entryGone
                 && ZipUtils::isDuplicateOfRaw(QFileInfo(zipPath).absolutePath(),
                                               QFileInfo(zipPath).completeBaseName(), innerPath, size);
-            if (archiveGone || entryGone || duplicate) {
-                missing.append(path);
+            if (duplicate) {
+                toDelete.append(path); // superseded, not missing
+            } else if (archiveGone || entryGone) {
+                (favourite ? toHide : toDelete).append(path);
             }
         } else if (!QFile::exists(path)) {
-            missing.append(path);
+            (favourite ? toHide : toDelete).append(path);
         }
     }
     q.finish();
 
-    if (missing.isEmpty()) return 0;
+    if (toDelete.isEmpty() && toHide.isEmpty()) return 0;
     if (isCancelled && isCancelled()) return 0;
 
     if (!db.transaction()) {
@@ -321,10 +359,24 @@ int Database::pruneMissingFiles(const QString& rootDir, const ScanObservation* o
 
     QSqlQuery delQ(db);
     delQ.prepare(QStringLiteral("DELETE FROM images WHERE path = ?"));
-    for (const QString& p : missing) {
+    QSqlQuery delFailure(db);
+    delFailure.prepare(QStringLiteral("DELETE FROM decode_failures WHERE path = ?"));
+    for (const QString& p : toDelete) {
         delQ.bindValue(0, p);
-        if (!delQ.exec()) {
-            m_lastError = delQ.lastError().text();
+        delFailure.bindValue(0, p);
+        if (!delQ.exec() || !delFailure.exec()) {
+            m_lastError = delQ.lastError().isValid() ? delQ.lastError().text()
+                                                     : delFailure.lastError().text();
+            db.rollback();
+            return 0;
+        }
+    }
+    QSqlQuery hideQ(db);
+    hideQ.prepare(QStringLiteral("UPDATE images SET missing = 1 WHERE path = ?"));
+    for (const QString& p : toHide) {
+        hideQ.bindValue(0, p);
+        if (!hideQ.exec()) {
+            m_lastError = hideQ.lastError().text();
             db.rollback();
             return 0;
         }
@@ -335,7 +387,7 @@ int Database::pruneMissingFiles(const QString& rootDir, const ScanObservation* o
         return 0;
     }
 
-    return static_cast<int>(missing.size());
+    return static_cast<int>(toDelete.size() + toHide.size());
 }
 
 QVector<ImageRecord> Database::getUnindexedPaths(const QString& rootDir) {
@@ -346,12 +398,16 @@ QVector<ImageRecord> Database::getUnindexedPaths(const QString& rootDir) {
     QSqlQuery q(db);
     QString sql = QStringLiteral(
         "SELECT path, mtime, file_size FROM images "
-        "WHERE (indexed = 0 OR COALESCE(thumb_path, '') = '' OR COALESCE(dhash, '') = '')");
+        "WHERE missing = 0 "
+        "  AND (indexed = 0 OR COALESCE(thumb_path, '') = '' OR COALESCE(dhash, '') = '') "
+        "  AND NOT EXISTS (SELECT 1 FROM decode_failures f WHERE f.path = images.path "
+        "                  AND f.file_size = images.file_size AND abs(f.mtime - images.mtime) < ?)");
     if (!rootDir.isEmpty()) {
         sql += QStringLiteral(" AND ") + kRootRangeClause;
     }
     sql += QStringLiteral(" ORDER BY mtime DESC;");
     q.prepare(sql);
+    q.addBindValue(MTIME_TOLERANCE_SECONDS);
     if (!rootDir.isEmpty()) {
         const auto range = rootPathRange(rootDir);
         q.addBindValue(range.first);
@@ -404,6 +460,7 @@ bool Database::updateImageFeatures(
         m_lastError = q.lastError().text();
         return false;
     }
+    clearDecodeFailure(path);
     return true;
 }
 
@@ -438,7 +495,47 @@ Database::UpdateResult Database::updateImageFeaturesIfUnchanged(
         m_lastError = q.lastError().text();
         return UpdateResult::Error;
     }
-    return q.numRowsAffected() > 0 ? UpdateResult::Updated : UpdateResult::Stale;
+    if (q.numRowsAffected() == 0) return UpdateResult::Stale;
+    clearDecodeFailure(path);
+    return UpdateResult::Updated;
+}
+
+bool Database::recordDecodeFailure(const QString& path, double mtime, qint64 fileSize) {
+    QSqlDatabase db = getDatabase();
+    if (!db.isOpen()) return false;
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT OR REPLACE INTO decode_failures (path, file_size, mtime) VALUES (?, ?, ?);"));
+    q.addBindValue(path);
+    q.addBindValue(fileSize);
+    q.addBindValue(mtime);
+    if (!q.exec()) {
+        m_lastError = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool Database::hasDecodeFailure(const QString& path, double mtime, qint64 fileSize) {
+    QSqlDatabase db = getDatabase();
+    if (!db.isOpen()) return false;
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT 1 FROM decode_failures WHERE path = ? AND file_size = ? AND abs(mtime - ?) < ?;"));
+    q.addBindValue(path);
+    q.addBindValue(fileSize);
+    q.addBindValue(mtime);
+    q.addBindValue(MTIME_TOLERANCE_SECONDS);
+    return q.exec() && q.next();
+}
+
+void Database::clearDecodeFailure(const QString& path) {
+    QSqlQuery q(getDatabase());
+    q.prepare(QStringLiteral("DELETE FROM decode_failures WHERE path = ?;"));
+    q.addBindValue(path);
+    if (!q.exec()) {
+        qWarning() << "Could not clear decode failure for" << path << ":" << q.lastError().text();
+    }
 }
 
 bool Database::toggleFavorite(const QString& path, bool* outNewVal) {
@@ -483,7 +580,7 @@ QVector<ImageRecord> Database::queryImages(const QueryFilter& filter) {
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return results;
 
-    QStringList clauses;
+    QStringList clauses{kPresentClause};
     QVector<QVariant> params;
 
     if (!filter.exactPath.isEmpty()) {
@@ -532,10 +629,7 @@ QVector<ImageRecord> Database::queryImages(const QueryFilter& filter) {
         params.append(pattern);
     }
 
-    QString whereSql;
-    if (!clauses.isEmpty()) {
-        whereSql = QStringLiteral("WHERE ") + clauses.join(QStringLiteral(" AND "));
-    }
+    const QString whereSql = QStringLiteral("WHERE ") + clauses.join(QStringLiteral(" AND "));
 
     QString sortSql = QStringLiteral("mtime DESC");
     if (filter.sortBy == QStringLiteral("mtime_asc")) {
@@ -601,9 +695,9 @@ QVector<QPair<QString, int>> Database::getSubfoldersWithCounts(const QString& ro
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return list;
 
-    QString whereSql;
+    QString whereSql = QStringLiteral("WHERE ") + kPresentClause + QStringLiteral(" ");
     if (!rootDir.isEmpty()) {
-        whereSql = QStringLiteral("WHERE ") + kRootRangeClause + QStringLiteral(" ");
+        whereSql += QStringLiteral("AND ") + kRootRangeClause + QStringLiteral(" ");
     }
 
     const QString sql = QStringLiteral(
@@ -632,10 +726,10 @@ Stats Database::getStats(const QString& rootDir) {
     QSqlDatabase db = getDatabase();
     if (!db.isOpen()) return s;
 
-    QString whereSql;
+    QString whereSql = QStringLiteral(" WHERE ") + kPresentClause;
     QPair<QString, QString> range;
     if (!rootDir.isEmpty()) {
-        whereSql = QStringLiteral(" WHERE ") + kRootRangeClause;
+        whereSql += QStringLiteral(" AND ") + kRootRangeClause;
         range = rootPathRange(rootDir);
     }
 

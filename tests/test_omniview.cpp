@@ -525,6 +525,7 @@ private slots:
         const ImageFeatures feat = ColorUtils::generateThumbnailAndFeatures(
             source, blocker.fileName() + "/thumb.webp");
         QVERIFY(!feat.valid);
+        QVERIFY(!feat.decodeFailed); // a write error must not be remembered as a broken image
     }
 
     void testViewerEmptyClearsClipboardImage() {

@@ -35,6 +35,24 @@ ImageRecord fetch(Database& db, const QString& path) {
     return rows.isEmpty() ? ImageRecord() : rows.first();
 }
 
+// Runs a scalar query on its own connection (bypassing Database's filters).
+QVariant rawScalar(const QString& dbPath, const QString& sql) {
+    QVariant value;
+    const QString conn = QStringLiteral("raw_scalar");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        db.setDatabaseName(dbPath);
+        if (db.open()) {
+            QSqlQuery q(db);
+            if (q.exec(sql) && q.next()) value = q.value(0);
+            q.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(conn);
+    return value;
+}
+
 void touch(const QString& path) {
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile f(path);
@@ -398,6 +416,150 @@ private slots:
         QVERIFY(migrated.initSchema());
         QVERIFY(fetch(migrated, QStringLiteral("/l/a.png")).isFavorite);
         QVERIFY(!QFile::exists(target + QStringLiteral(".migrating")));
+    }
+
+    void missingFavouriteIsHiddenAndComesBack() {
+        QTemporaryDir dir;
+        const QString dbPath = dir.filePath(QStringLiteral("index.db"));
+        Database db(dbPath);
+        QVERIFY(db.initSchema());
+        const QString root = dir.filePath(QStringLiteral("r"));
+        const QString fav = root + QStringLiteral("/sub/fav.png");
+        const QString plain = root + QStringLiteral("/sub/plain.png");
+        touch(fav);
+        touch(plain);
+        QVERIFY(db.batchSyncFiles({row(fav, QStringLiteral("sub")), row(plain, QStringLiteral("sub"))}));
+        QVERIFY(db.toggleFavorite(fav));
+
+        QVERIFY(QFile::remove(fav));
+        QVERIFY(QFile::remove(plain));
+        QCOMPARE(db.pruneMissingFiles(root), 2);
+        // Hidden everywhere...
+        QVERIFY(fetch(db, fav).path.isEmpty());
+        QCOMPARE(db.getStats(root).totalImages, 0);
+        QCOMPARE(db.getStats(root).favoritesCount, 0);
+        QVERIFY(db.getSubfoldersWithCounts(root).isEmpty());
+        QVERIFY(db.getUnindexedPaths(root).isEmpty());
+        // ...but only the favourite's row is kept.
+        QCOMPARE(rawScalar(dbPath, QStringLiteral("SELECT COUNT(*) FROM images")).toInt(), 1);
+        QCOMPARE(db.pruneMissingFiles(root), 0); // already marked
+
+        touch(fav);
+        QVERIFY(db.batchSyncFiles({row(fav, QStringLiteral("sub"))}));
+        QVERIFY(fetch(db, fav).isFavorite);
+        QCOMPARE(db.getStats(root).favoritesCount, 1);
+    }
+
+    void oldSchemaIsUpgradedInPlace() {
+        QTemporaryDir dir;
+        const QString dbPath = dir.filePath(QStringLiteral("index.db"));
+        {
+            const QString conn = QStringLiteral("old_schema");
+            {
+                QSqlDatabase raw = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                raw.setDatabaseName(dbPath);
+                QVERIFY(raw.open());
+                QSqlQuery q(raw);
+                QVERIFY(q.exec(QStringLiteral(
+                    "CREATE TABLE images (path TEXT PRIMARY KEY, filename TEXT NOT NULL, subfolder TEXT NOT NULL,"
+                    " file_size INTEGER NOT NULL, mtime REAL NOT NULL, width INTEGER DEFAULT 0,"
+                    " height INTEGER DEFAULT 0, aspect_type TEXT DEFAULT 'square', color_name TEXT DEFAULT '',"
+                    " color_r INTEGER DEFAULT 0, color_g INTEGER DEFAULT 0, color_b INTEGER DEFAULT 0,"
+                    " dhash TEXT DEFAULT '', thumb_path TEXT DEFAULT '', is_favorite INTEGER DEFAULT 0,"
+                    " indexed INTEGER DEFAULT 0)")));
+                QVERIFY(q.exec(QStringLiteral("CREATE INDEX idx_path ON images(path)")));
+                QVERIFY(q.exec(QStringLiteral(
+                    "INSERT INTO images (path, filename, subfolder, file_size, mtime, is_favorite)"
+                    " VALUES ('/o/a.png', 'a.png', '', 1, 1.0, 1)")));
+                q.finish();
+                raw.close();
+            }
+            QSqlDatabase::removeDatabase(conn);
+        }
+        Database db(dbPath);
+        QVERIFY(db.initSchema());
+        QVERIFY(db.initSchema()); // idempotent
+        QCOMPARE(rawScalar(dbPath, QStringLiteral(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_path'")).toInt(), 0);
+        QCOMPARE(rawScalar(dbPath, QStringLiteral(
+            "SELECT COUNT(*) FROM pragma_table_info('images') WHERE name = 'missing'")).toInt(), 1);
+        QVERIFY(fetch(db, QStringLiteral("/o/a.png")).isFavorite);
+    }
+
+    void decodeFailuresPersistUntilTheFileChanges() {
+        QTemporaryDir dir;
+        const QString dbPath = dir.filePath(QStringLiteral("index.db"));
+        const QString path = QStringLiteral("/f/broken.png");
+        {
+            Database db(dbPath);
+            QVERIFY(db.initSchema());
+            QVERIFY(db.batchSyncFiles({row(path, QString(), 10, 100.0)}));
+            QVERIFY(db.recordDecodeFailure(path, 100.0, 10));
+        }
+        Database db(dbPath); // a later session
+        QVERIFY(db.initSchema());
+        QVERIFY(db.hasDecodeFailure(path, 100.4, 10)); // same version (mtime tolerance)
+        QVERIFY(db.getUnindexedPaths().isEmpty());
+        QVERIFY(db.batchSyncFiles({row(path, QString(), 11, 200.0)})); // file replaced
+        QVERIFY(!db.hasDecodeFailure(path, 200.0, 11));
+        QCOMPARE(db.getUnindexedPaths().size(), 1);
+        QVERIFY(db.recordDecodeFailure(path, 200.0, 11));
+        QVERIFY(db.updateImageFeatures(path, 1, 1, QStringLiteral("square"), QStringLiteral("red"),
+                                       1, 2, 3, QStringLiteral("0011223344556677"), QStringLiteral("/t.webp")));
+        QVERIFY(!db.hasDecodeFailure(path, 200.0, 11)); // decoded after all (e.g. plugin installed)
+    }
+
+    void defaultCacheDirIsHomeDotCache() {
+        QCOMPARE(Config::defaultCacheDir(), QDir::homePath() + QStringLiteral("/.cache/omniview"));
+    }
+
+    void cacheDirMigrationMovesCacheAndRewritesThumbPaths() {
+        QTemporaryDir dir;
+        const QString from = dir.filePath(QStringLiteral("old/omniview"));
+        const QString to = dir.filePath(QStringLiteral("home/.cache/omniview"));
+        const QString thumb = from + QStringLiteral("/thumbnails/abc.webp");
+        touch(thumb);
+        {
+            Database db(from + QStringLiteral("/omniview_index.db"));
+            QVERIFY(db.initSchema());
+            QVERIFY(db.batchSyncFiles({row(QStringLiteral("/m/a.png"), QString())}));
+            QVERIFY(db.toggleFavorite(QStringLiteral("/m/a.png")));
+            QVERIFY(db.updateImageFeatures(QStringLiteral("/m/a.png"), 1, 1, QStringLiteral("square"),
+                                           QStringLiteral("red"), 1, 2, 3, QStringLiteral("0011223344556677"), thumb));
+        }
+        QVERIFY(Config::migrateCacheDir(from, to));
+        QVERIFY(!QDir(from).exists()); // moved, not copied
+        QVERIFY(QFile::exists(to + QStringLiteral("/thumbnails/abc.webp")));
+        Database db(to + QStringLiteral("/omniview_index.db"));
+        QVERIFY(db.initSchema());
+        const ImageRecord r = fetch(db, QStringLiteral("/m/a.png"));
+        QVERIFY(r.isFavorite);
+        QCOMPARE(r.thumbPath, to + QStringLiteral("/thumbnails/abc.webp"));
+    }
+
+    void cacheDirMigrationCopiesWhenTargetIsInUse() {
+        QTemporaryDir dir;
+        const QString from = dir.filePath(QStringLiteral("old/omniview"));
+        const QString to = dir.filePath(QStringLiteral("home/.cache/omniview"));
+        const QString thumb = from + QStringLiteral("/thumbnails/abc.webp");
+        touch(thumb);
+        touch(to + QStringLiteral("/unrelated.txt")); // target exists and is not empty
+        {
+            Database db(from + QStringLiteral("/omniview_index.db"));
+            QVERIFY(db.initSchema());
+            QVERIFY(db.batchSyncFiles({row(QStringLiteral("/m/a.png"), QString())}));
+            QVERIFY(db.updateImageFeatures(QStringLiteral("/m/a.png"), 1, 1, QStringLiteral("square"),
+                                           QStringLiteral("red"), 1, 2, 3, QStringLiteral("0011223344556677"), thumb));
+        }
+        QVERIFY(Config::migrateCacheDir(from, to));
+        QVERIFY(QFile::exists(from + QStringLiteral("/omniview_index.db"))); // old cache left alone
+        QVERIFY(QFile::exists(to + QStringLiteral("/unrelated.txt")));
+        QVERIFY(QFile::exists(to + QStringLiteral("/thumbnails/abc.webp")));
+        Database db(to + QStringLiteral("/omniview_index.db"));
+        QVERIFY(db.initSchema());
+        QCOMPARE(fetch(db, QStringLiteral("/m/a.png")).thumbPath, to + QStringLiteral("/thumbnails/abc.webp"));
+        // Never overwrites an existing index.
+        QVERIFY(!Config::migrateCacheDir(from, to));
     }
 
     void brokenQt5HashesAreClearedOnStartup() {
