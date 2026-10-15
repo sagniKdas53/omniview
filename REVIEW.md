@@ -38,7 +38,7 @@ Clang's sanitizer runtime is not installed in this container, so sanitizer build
 | Check | Baseline (61a2d90) | After this PR |
 |---|---|---|
 | Build Qt 5 / Qt 6 | ✅ / ✅ (Qt 6: 10 deprecation warnings) | ✅ / ✅ (0 warnings) |
-| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 108 test functions) |
+| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 116 test functions) |
 | Warnings build (`-Wall -Wextra -Wpedantic -Wshadow -Wconversion`, unique) | Qt 5: **6**, Qt 6: **17** | Qt 5: **0**, Qt 6: **0** |
 | ASan+UBSan Qt 6 | 0 reports | 0 reports |
 | ASan+UBSan Qt 5 | **1** LeakSanitizer report (7 allocations, all in Qt's `libqoffscreen`) → suite fails | 0 (leak suppressed by library name, third-party only) |
@@ -128,9 +128,9 @@ Line numbers refer to the baseline commit.
 | M23 | `ColorUtils.cpp:145` | Width/height/aspect came from the pre-EXIF size: phone portraits stored as landscape. | Orientation-corrected size. | Fixed, T |
 | M24 | `ColorUtils.cpp:176` | A null scaled image (OOM, empty size) was dereferenced → segfault on a worker thread. | Null checks. | Fixed, T |
 | M25 | `ColorUtils.cpp:171` | Transparent pixels counted as black (logos/stickers classified "black"). | Alpha-weighted mean; fully transparent → gray. | Fixed, T |
-| M26 | `ColorUtils.cpp:209` | WebP→JPEG fallback reused the failed `QImageWriter` (still WebP), so it never worked when a WebP handler existed but failed. | Fresh writer; one warning when WebP is unavailable. JPEG bytes keep the shared `.webp` name for cache compatibility; CI now installs the image-formats plugins. | Fixed, R |
-| M27 | `ColorUtils.cpp:191` | dHash is not value-compatible with the Rust/Python apps sharing the DB (luma formula, orientation, source resolution): near-duplicates indexed by different apps never match. | **Needs your decision** (canonical definition across implementations). This PR uses Rec.601 integer luma on the thumbnail (PIL `convert("L")` semantics). | Open |
-| M28 | `Config.cpp:34` | `GenericCacheLocation` ≠ the Rust app's hard-coded `~/.cache/omniview` whenever `XDG_CACHE_HOME` is set, and always on macOS/Windows: no sharing there. | **Needs your decision** (changing it moves existing C++ caches). | Open |
+| M26 | `ColorUtils.cpp:209` | WebP→JPEG fallback reused the failed `QImageWriter` (still WebP), so it never worked when a WebP handler existed but failed. | Fresh writer; one warning when WebP is unavailable. JPEG bytes keep the shared `.webp` name (owner decision: keep, so thumbnails still persist without the plugin); CI installs the image-formats plugins. | Fixed, R |
+| M27 | `ColorUtils.cpp:191` | dHash is not value-compatible with the Rust/Python apps sharing the DB (luma formula, orientation, source resolution): near-duplicates indexed by different apps never match. Owner decision: the C++ definition is the reference (Python is unmaintained, Rust on hold): Rec.601 integer luma on the thumbnail. | Decided |
+| M28 | `Config.cpp:34` | `GenericCacheLocation` ≠ the Rust app's hard-coded `~/.cache/omniview` whenever `XDG_CACHE_HOME` is set, and always on macOS/Windows: no sharing there. | `~/.cache/omniview` everywhere (owner decision). A cache in the old location is moved on first start (copied if the move is impossible) and stored thumbnail paths are rewritten. | Fixed, T |
 | M29 | `MainWindow.cpp:801` | File events during a scan were dropped. | Pending-rescan flag re-runs the scan when the current one finishes. | Fixed, R |
 | M30 | `MainWindow.cpp:789` | Only the root and its first 199 top-level folders were watched. | `LibraryWatcher`: recursive (non-hidden, no symlinks), capped at 4096 dirs, failures surfaced in the status bar. | Fixed, T |
 | M31 | `MainWindow.cpp:779` | Removing and re-adding all watches after each scan discarded queued inotify events. | Diffed watch set. | Fixed, T |
@@ -156,16 +156,18 @@ Line numbers refer to the baseline commit.
 | M51 | `ViewerWindow.cpp:140` | Toolbar forces a ~1.4–1.6k px minimum width (off-screen on 1366/1440 px displays). | — | Open (follow-up: QToolBar overflow) |
 | M52 | `MainWindow.h:93` | `m_currentItems` duplicated the model (deep copy on every refresh) and was the root of H15. | Removed. | Fixed |
 | M53 | `MainWindow.cpp:20` | `ensureDirectories`/`initSchema` failures ignored: empty gallery, no message. | Error shown in the status label. | Fixed, R |
-| M54 | `Database.cpp:225` | Pruning hard-deletes rows (and favourites) for files under a temporarily missing *sub*-mount of the root. | — | Open: proper fix ("mark missing" instead of delete) needs a schema change → your decision |
+| M54 | `Database.cpp:225` | Pruning hard-deletes rows (and favourites) for files under a temporarily missing *sub*-mount of the root. | Additive `missing` column (owner decision): favourites whose file disappears are hidden, not deleted, and return with the file; other rows are still deleted so the index does not grow without bound. Older databases are upgraded in place. | Fixed, T |
 | M55 | `ColorUtils.cpp:168` | Qt 6.4 re-quantises palette/mono images when smooth-scaling (dithered thumbnails). | Normalise to (A)RGB32 after decode. | Fixed, T |
 | M56 | `ColorUtils.cpp:188` | Qt 6 float HSV moved boundary colours into the wrong bucket (20k colours differ Qt5↔Qt6). | Double-precision HSV from 8-bit values. | Fixed, T |
 | M57 | `ColorUtils.cpp:147` | Pixel cap ignores bytes/pixel (64 MP 16-bit PNG ≈1 GB transient on Qt 5). | Qt 6 allocation limit + reduced decode where supported. | Partly fixed (Qt 5 16-bit PNG worst case remains) |
-| M58 | `ZipUtils.cpp:95` | (Windows, untested) miniz opens archives without share-delete, so Explorer can't move/delete a zip while it's being indexed. | — | Open (follow-up; manual Windows test listed) |
+| M58 | `ZipUtils.cpp:95` | (Windows, untested) miniz opens archives without share-delete, so Explorer can't move/delete a zip while it's being indexed. | — | Not applicable: Windows is no longer supported |
 | M59 | `ZipUtils.cpp:154` | Each entry read re-opens the archive and walks the directory (O(N²) for big archives). | — | Open (follow-up: per-worker archive cache) |
 | M60 | `main.cpp:88` | A typo'd/non-directory argument silently indexed the entire `$HOME`. | Warn and open the default Pictures folder. | Fixed, R |
 | M61 | `tests/test_omniview.cpp:296` | QSignalSpy on a signal emitted from the Scanner thread: TSan data race, flaky test. | Tests wait on the thread / use queued connections. | Fixed, S |
 | M62 | `ColorUtils.cpp` (this PR, from CodeRabbit) | The pixel cap rejected >64 MP JPEGs (108/200 MP phone photos) even though libjpeg decodes them at up to 1/8 per side: no thumbnail, "too large" in the viewer. | JPEG (the only handler that decodes at reduced size; WebP has no `ScaledSize` support) may be 64× larger when a scaled decode is requested and its output fits the cap (a box as large as the image still gets the normal cap); others (PNG decodes in full despite advertising `ScaledSize`) keep the cap. | Fixed, T |
 | M63 | `ViewerWindow.cpp` (this PR, from CodeRabbit) | `MAX_VIEW_DIMENSION` capped logical pixels; at a device pixel ratio of 2 the backing pixmap reached 16384² (~1 GiB) on every zoom step. | Cap applied in device pixels. | Fixed, T (`ui_tests_hidpi`) |
+| M64 | `ColorUtils.cpp` (this PR, from CodeRabbit) | Images whose size is unknown before decoding (e.g. ICNS, also when renamed to `.png`) skipped the pixel cap; Qt 5 has no allocation limit to fall back on. | Rejected on Qt 5 (owner decision); Qt 6 relies on the 1 GB allocation limit. Every supported format reports its size. | Fixed, T |
+| M65 | `ThumbnailWorker.cpp` | Broken images were remembered only per session: every launch re-decoded all of them in the background pass. | `decode_failures` table keyed to file size+mtime (owner decision); skipped until the file changes, cleared on a later success. Thumbnail write errors are not recorded. | Fixed, T |
 
 ### Low
 
@@ -199,7 +201,7 @@ Line numbers refer to the baseline commit.
 | L26 | `Database.cpp:379` | Search case-insensitive for ASCII only | Open |
 | L27 | `ZipUtils.cpp:137` | Zip entry mtimes depend on local time zone | Open |
 | L28 | `ZipUtils.cpp:230` | Extraction cache never evicted | Partly (no temp orphans now); eviction open |
-| L29 | `Database.cpp:108` | Old DBs keep a redundant `idx_path` | Open (schema change → your call) |
+| L29 | `Database.cpp:108` | Old DBs keep a redundant `idx_path` | Dropped at start-up (owner decision), T |
 | L30 | `ViewerWindow.cpp:343` | Animated GIF/WebP show the first frame only | Open |
 | L31 | `ViewerWindow.cpp:427` | Zoom does not keep the view centre | Open |
 | L32 | `ViewerWindow.cpp:399` | No true 1:1 above 8192 px | Open (by design: bounded decode) |
@@ -227,26 +229,23 @@ Line numbers refer to the baseline commit.
 - **CMake:** `omniview_core` static library shared by the app and tests (sources were compiled 2–3×);
   vendored miniz built as its own target; `OMNIVIEW_WARNINGS`, `OMNIVIEW_WARNINGS_AS_ERRORS`,
   `OMNIVIEW_SANITIZE` (all off by default, warnings on project targets only); install rule; version macro.
-- **CI:** Linux/Windows get the WebP image-format plugins; new Linux sanitizer matrix (ASan+UBSan, TSan ×
-  Qt 5, Qt 6) with project warnings enabled.
+- **CI:** Linux only (owner decision: macOS and Windows dropped, including their packaging and
+  platform-specific code); the WebP image-format plugins are installed; new sanitizer matrix
+  (ASan+UBSan, TSan × Qt 5, Qt 6) with project warnings enabled.
 - **Review tooling:** `.clang-tidy` (with rationale for exclusions), `.coderabbit.yaml`.
 
 ## 4. Deliberately not done (and why)
 
 | Item | Why |
 |---|---|
-| M27 canonical dHash across implementations | Cross-repository decision; needs agreement with the Python/Rust versions. |
-| M28 cache directory on macOS/Windows/`XDG_CACHE_HOME` | Changes the shared cache path — you asked to be consulted. |
-| M54 "mark missing" instead of deleting rows; persisting decode failures; dropping `idx_path`; schema versioning (`PRAGMA user_version`) | Schema changes without an agreed migration — you asked to be consulted. |
-| M38/M46/M50/M59 async extraction, async viewer decode, lazy gallery model, archive handle cache | Larger refactors with their own risk; better as focused follow-up PRs. |
-| M39 Wayland drag from menu, M58 Windows share mode | Cannot be verified in this headless Linux container; listed for manual testing. |
+| Schema versioning (`PRAGMA user_version`) | Owner decision: not adopted; schema changes stay additive and are detected at start-up. |
+| M38/M46/M50/M59 async extraction, async viewer decode, lazy gallery model, archive handle cache | Larger refactors with their own risk; planned as focused follow-up PRs in `docs/ROADMAP.md`. |
+| M39 Wayland drag from menu | Cannot be verified in this headless container; listed for manual testing. |
 | M51, L25–L35 | Low impact or cosmetic. |
-| Extracting the theme/stylesheet code from `MainWindow` | Pure refactor with no test coverage possible offscreen; listed as follow-up. |
+| Extracting the theme/stylesheet code from `MainWindow` | Pure refactor; planned in `docs/ROADMAP.md`. |
 
 ## 5. Suggested follow-ups
 
-1. Agree a canonical dHash/colour definition and cache directory with the Python/Rust implementations (M27, M28).
-2. Schema v2 with `PRAGMA user_version` migrations: `missing` flag instead of deletes, persisted decode failures, drop `idx_path`.
-3. Move gallery queries off the GUI thread and page the model (M50); async viewer decode with prefetch (M46).
-4. Per-worker archive handle cache (M59) and a global in-flight decompression budget (M15).
-5. Extract theming (one palette struct + stylesheet template) out of `MainWindow` and `ViewerWindow`.
+See `docs/ROADMAP.md` for the plan of each: background zip extraction for drags (M38), asynchronous
+viewer decode with prefetch (M46), a lazy paged gallery model (M50), an archive handle cache with a
+decompression budget (M59, M15), and theme extraction.
