@@ -1,9 +1,10 @@
 #include "ViewerWindow.h"
+#include "ColorUtils.h"
+#include "FileActions.h"
 #include "ZipUtils.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QToolBar>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -11,20 +12,26 @@
 #include <QScrollBar>
 #include <QDrag>
 #include <QMimeData>
-#include <QUrl>
 #include <QClipboard>
 #include <QApplication>
-#include <QProcess>
-#include <QFileInfo>
-#include <QImageReader>
-#include <QBuffer>
-#include <QDesktopServices>
-#include <QPainter>
-#include <QPainterPath>
 #include <QTimer>
 #include <QtMath>
 
+#include <cmath>
+
 namespace OmniView {
+
+namespace {
+
+QPoint globalPosOf(const QMouseEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return e->globalPosition().toPoint();
+#else
+    return e->globalPos();
+#endif
+}
+
+} // namespace
 
 DragButton::DragButton(const QString& text, QWidget* parent)
     : QPushButton(text, parent)
@@ -36,87 +43,40 @@ DragButton::DragButton(const QString& text, QWidget* parent)
 void DragButton::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         m_dragStartPos = event->pos();
+        m_pressed = true;
     }
     QPushButton::mousePressEvent(event);
 }
 
+void DragButton::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        m_pressed = false;
+    }
+    QPushButton::mouseReleaseEvent(event);
+}
+
 void DragButton::mouseMoveEvent(QMouseEvent* event) {
-    if ((event->buttons() & Qt::LeftButton) && !m_dragStartPos.isNull()) {
+    if ((event->buttons() & Qt::LeftButton) && m_pressed) {
         const int dist = (event->pos() - m_dragStartPos).manhattanLength();
         if (dist >= QApplication::startDragDistance()) {
-            QStringList paths = m_filePaths;
-            if (paths.isEmpty() && !m_filePath.isEmpty()) {
-                paths.append(m_filePath);
-            }
-            QStringList validPaths;
-            for (const QString& p : paths) {
-                if (ZipUtils::isZipPath(p)) {
-                    const QString extracted = ZipUtils::ensureExtracted(p);
-                    if (!extracted.isEmpty() && QFile::exists(extracted)) {
-                        validPaths.append(extracted);
-                    }
-                } else if (QFile::exists(p)) {
-                    validPaths.append(p);
-                }
-            }
-            if (!validPaths.isEmpty()) {
+            m_pressed = false;
+            setDown(false);
+            const QStringList localFiles = FileActions::resolveLocalFiles(m_filePaths);
+            if (!localFiles.isEmpty()) {
                 auto* drag = new QDrag(this);
-                auto* mimeData = new QMimeData();
-                QList<QUrl> urls;
-                for (const QString& p : validPaths) {
-                    urls.append(QUrl::fromLocalFile(p));
-                }
-                mimeData->setUrls(urls);
-                mimeData->setText(validPaths.join(QStringLiteral("\n")));
-                QStringList urlStrings;
-                for (const QUrl& u : urls) {
-                    urlStrings.append(u.toString());
-                }
-                const QByteArray gnomeData = "copy\n" + urlStrings.join(QStringLiteral("\n")).toUtf8();
-                mimeData->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
-
-                // Thumbnail badge preview
-                QPixmap preview(validPaths.first());
-                const int badgeMax = 120;
-                if (!preview.isNull()) {
-                    const QPixmap scaled = preview.scaled(badgeMax, badgeMax, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-                    QPixmap badge(scaled.width() + 12, scaled.height() + 12);
-                    badge.fill(Qt::transparent);
-
-                    QPainter p(&badge);
-                    p.setRenderHint(QPainter::Antialiasing, true);
-
-                    QPainterPath shape;
-                    shape.addRoundedRect(QRectF(1, 1, scaled.width() + 10, scaled.height() + 10), 8, 8);
-                    p.fillPath(shape, QColor(20, 24, 38, 230));
-                    p.setPen(QPen(QColor(99, 102, 241), 2));
-                    p.drawPath(shape);
-                    p.drawPixmap(6, 6, scaled);
-
-                    if (validPaths.size() > 1) {
-                        const QString countStr = QStringLiteral("📦 %1 files").arg(validPaths.size());
-                        QFont f = p.font();
-                        f.setBold(true);
-                        f.setPointSize(9);
-                        p.setFont(f);
-                        QFontMetrics fm(f);
-                        const int pillW = fm.horizontalAdvance(countStr) + 12;
-                        const QRectF pill(badge.width() - pillW - 4, badge.height() - 22, pillW, 18);
-                        QPainterPath pp;
-                        pp.addRoundedRect(pill, 6, 6);
-                        p.fillPath(pp, QColor(79, 70, 229, 240));
-                        p.setPen(QColor(255, 255, 255));
-                        p.drawText(pill, Qt::AlignCenter, countStr);
-                    }
-                    p.end();
-
+                drag->setMimeData(FileActions::createFileMimeData(localFiles));
+                // Reduced, EXIF-aware decode just for the 120 px badge.
+                const QImage small = ColorUtils::loadImage(m_filePaths.first(), QSize(240, 240));
+                const QPixmap badge = FileActions::makeDragBadge(
+                    small.isNull() ? QPixmap()
+                                   : QPixmap::fromImage(small.scaled(240, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation)),
+                    static_cast<int>(localFiles.size()));
+                if (!badge.isNull()) {
                     drag->setPixmap(badge);
                     drag->setHotSpot(QPoint(badge.width() / 2, badge.height() / 2));
                 }
-                drag->setMimeData(mimeData);
                 drag->exec(Qt::CopyAction);
             }
-            m_dragStartPos = QPoint();
             return;
         }
     }
@@ -199,17 +159,17 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     toolLayout->addWidget(m_btnFav);
 
     auto* btnCopyImg = new QPushButton(QStringLiteral("🖼️ Copy Image"), this);
-    btnCopyImg->setToolTip(QStringLiteral("Copy image bitmap to clipboard (Ctrl+C)"));
+    btnCopyImg->setToolTip(QStringLiteral("Copy image bitmap to clipboard"));
     connect(btnCopyImg, &QPushButton::clicked, this, &ViewerWindow::copyImage);
     toolLayout->addWidget(btnCopyImg);
 
     auto* btnCopyPath = new QPushButton(QStringLiteral("📋 Copy Path"), this);
-    btnCopyPath->setToolTip(QStringLiteral("Copy file path to clipboard"));
+    btnCopyPath->setToolTip(QStringLiteral("Copy file path to clipboard (Ctrl+Shift+C)"));
     connect(btnCopyPath, &QPushButton::clicked, this, &ViewerWindow::copyPath);
     toolLayout->addWidget(btnCopyPath);
 
     auto* btnCopyFile = new QPushButton(QStringLiteral("📁 Copy File (Attach)"), this);
-    btnCopyFile->setToolTip(QStringLiteral("Copy file for pasting into chat or file manager"));
+    btnCopyFile->setToolTip(QStringLiteral("Copy file for pasting into chat or file manager (Ctrl+C)"));
     connect(btnCopyFile, &QPushButton::clicked, this, &ViewerWindow::copyFile);
     toolLayout->addWidget(btnCopyFile);
 
@@ -249,6 +209,14 @@ ViewerWindow::ViewerWindow(QWidget* parent)
     m_imageLabel->installEventFilter(this);
 
     mainLayout->addWidget(m_scrollArea, 1);
+
+    // Keyboard navigation belongs to the window: a focused toolbar button or
+    // the scroll area would otherwise swallow arrows and Space.
+    for (auto* button : findChildren<QPushButton*>()) {
+        button->setFocusPolicy(Qt::NoFocus);
+    }
+    m_scrollArea->setFocusPolicy(Qt::NoFocus);
+    setFocusPolicy(Qt::StrongFocus);
 
     applyTheme();
 }
@@ -320,118 +288,125 @@ void ViewerWindow::applyTheme() {
 void ViewerWindow::showImage(const QVector<ImageRecord>& items, int index) {
     m_items = items;
     m_currentIndex = m_items.isEmpty() ? -1 : qBound(0, index, static_cast<int>(m_items.size()) - 1);
-    m_currentImage = QImage();
-    m_dragBtn->setFilePath(QString());
     m_fitMode = true;
+    loadCurrentImage();
 
-    if (m_currentIndex >= 0 && m_currentIndex < m_items.size()) {
-        const QString path = m_items[m_currentIndex].path;
-        m_dragBtn->setFilePath(path);
-
-        QString zipPath, innerPath;
-        if (ZipUtils::isZipPath(path, &zipPath, &innerPath)) {
-            const QByteArray bytes = ZipUtils::readZipEntryBytes(zipPath, innerPath);
-            QBuffer buf;
-            buf.setData(bytes);
-            buf.open(QIODevice::ReadOnly);
-            QImageReader reader(&buf);
-            reader.setAutoTransform(true);
-            m_currentImage = reader.read();
-        } else {
-            QImageReader reader(path);
-            reader.setAutoTransform(true);
-            m_currentImage = reader.read();
-        }
+    // show() keeps a minimized window minimized; restore it explicitly.
+    if (windowState() & Qt::WindowMinimized) {
+        setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
     }
-
     show();
     raise();
     activateWindow();
+    setFocus(Qt::OtherFocusReason);
     updateDisplay();
 }
 
+void ViewerWindow::loadCurrentImage() {
+    m_currentImage = QImage();
+    m_originalSize = QSize();
+    m_loadError.clear();
+    m_wheelAccumulator = 0;
+    if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) {
+        m_dragBtn->setFilePath(QString());
+        return;
+    }
+    const QString path = m_items.at(m_currentIndex).path;
+    m_dragBtn->setFilePath(path);
+    // Bounded, EXIF-aware decode: anything larger than the largest view we
+    // ever render is decoded at reduced size where the format allows it.
+    m_currentImage = ColorUtils::loadImage(
+        path, QSize(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION), &m_originalSize, &m_loadError);
+    if (m_currentImage.isNull() && m_loadError.isEmpty()) {
+        m_loadError = QStringLiteral("Could not load image");
+    }
+}
+
 void ViewerWindow::updateDisplay() {
-    if (m_currentIndex < 0 || m_currentIndex >= m_items.size() || m_currentImage.isNull()) {
+    if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) {
         m_imageLabel->clear();
+        m_imageLabel->setFixedSize(1, 1);
         m_infoLabel->clear();
+        setWindowTitle(QStringLiteral("OmniView — Image Viewer"));
         return;
     }
 
-    const auto& item = m_items[m_currentIndex];
-    m_dragBtn->setFilePath(item.path);
+    const ImageRecord& item = m_items.at(m_currentIndex);
     m_btnFav->setText(item.isFavorite ? QStringLiteral("★ Favorited") : QStringLiteral("⭐ Favorite"));
+    setWindowTitle(QStringLiteral("%1 — OmniView Viewer (%2 / %3)")
+        .arg(item.filename, QString::number(m_currentIndex + 1), QString::number(m_items.size())));
 
-    const QSize origSize = m_currentImage.size();
+    if (m_currentImage.isNull()) {
+        m_imageLabel->setFixedSize(m_scrollArea->viewport()->size());
+        m_imageLabel->setText(QStringLiteral("⚠ %1").arg(m_loadError));
+        m_infoLabel->setText(QStringLiteral("%1 / %2 — cannot display: %3")
+            .arg(QString::number(m_currentIndex + 1), QString::number(m_items.size()), m_loadError));
+        return;
+    }
+
+    const QSize decodedSize = m_currentImage.size();
+    const QSize origSize = m_originalSize.isValid() ? m_originalSize : decodedSize;
     QSize targetSize;
 
     if (m_fitMode) {
         QSize availSize = m_scrollArea->viewport()->size() - QSize(24, 24);
-        if (availSize.width() < 100 || availSize.height() < 100) {
-            availSize = m_scrollArea->size() - QSize(24, 24);
+        if (availSize.width() < 50 || availSize.height() < 50) {
+            // Not laid out yet: estimate from the window.
+            availSize = size() - QSize(40, 100);
         }
-        if (availSize.width() < 100 || availSize.height() < 100) {
-            availSize = this->size() - QSize(40, 100);
-        }
-        if (availSize.width() < 200) availSize.setWidth(1000);
-        if (availSize.height() < 200) availSize.setHeight(700);
+        availSize = availSize.expandedTo(QSize(1, 1));
 
         targetSize = origSize.scaled(availSize, Qt::KeepAspectRatio);
-        // For tiny images (like small icons), limit upscaling in fit mode to at most 3x
+        // Small images: upscale at most 3x when fitting.
         if (targetSize.width() > origSize.width() * 3) {
             targetSize = origSize * 3;
-            if (targetSize.width() > availSize.width() || targetSize.height() > availSize.height()) {
-                targetSize = origSize.scaled(availSize, Qt::KeepAspectRatio);
-            }
         }
         m_zoomFactor = static_cast<double>(targetSize.width()) / origSize.width();
     } else {
         targetSize = origSize * m_zoomFactor;
     }
 
-    if (m_zoomFactor < 0.01) {
-        m_zoomFactor = 0.01;
-    }
-
-    if (targetSize.width() < 1) targetSize.setWidth(1);
-    if (targetSize.height() < 1) targetSize.setHeight(1);
-
-    constexpr int MAX_VIEW_DIMENSION = 8192;
+    targetSize = targetSize.expandedTo(QSize(1, 1));
     if (targetSize.width() > MAX_VIEW_DIMENSION || targetSize.height() > MAX_VIEW_DIMENSION) {
         targetSize = targetSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
-        m_zoomFactor = static_cast<double>(targetSize.width()) / origSize.width();
     }
 
-    const QPixmap pix = QPixmap::fromImage(
-        m_currentImage.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation)
-    );
+    // Render at device resolution so HiDPI screens get crisp pixels, keeping
+    // the backing store within MAX_VIEW_DIMENSION device pixels.
+    QSize deviceSize = (QSizeF(targetSize) * devicePixelRatioF()).toSize().expandedTo(QSize(1, 1));
+    if (deviceSize.width() > MAX_VIEW_DIMENSION || deviceSize.height() > MAX_VIEW_DIMENSION) {
+        deviceSize = deviceSize.scaled(MAX_VIEW_DIMENSION, MAX_VIEW_DIMENSION, Qt::KeepAspectRatio);
+    }
+    // deviceSize already has targetSize's aspect ratio; scaling to it exactly
+    // avoids KeepAspectRatio rounding the width off by a pixel or two (Qt 6.11
+    // then rejects the resulting sub-1 device pixel ratio).
+    QPixmap pix = QPixmap::fromImage(
+        m_currentImage.scaled(deviceSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    pix.setDevicePixelRatio(static_cast<qreal>(deviceSize.width()) / targetSize.width());
     m_imageLabel->setPixmap(pix);
     m_imageLabel->setFixedSize(targetSize);
 
     const double mb = static_cast<double>(item.fileSize) / (1024.0 * 1024.0);
-    setWindowTitle(QStringLiteral("%1 — OmniView Viewer (%2 / %3)")
-        .arg(item.filename)
-        .arg(m_currentIndex + 1)
-        .arg(m_items.size()));
+    const double shownZoom = static_cast<double>(targetSize.width()) / origSize.width();
     m_infoLabel->setText(QStringLiteral("%1 / %2 — %3×%4 (%5 MB, %6%)")
-        .arg(m_currentIndex + 1)
-        .arg(m_items.size())
-        .arg(origSize.width())
-        .arg(origSize.height())
-        .arg(mb, 0, 'f', 1)
-        .arg(static_cast<int>(m_zoomFactor * 100.0))
-    );
+        .arg(QString::number(m_currentIndex + 1), QString::number(m_items.size()),
+             QString::number(origSize.width()), QString::number(origSize.height()),
+             QString::number(mb, 'f', 1), QString::number(qRound(shownZoom * 100.0))));
+}
+
+void ViewerWindow::zoomBy(double factor) {
+    if (m_currentImage.isNull()) return;
+    m_fitMode = false;
+    m_zoomFactor = qBound(MIN_ZOOM, m_zoomFactor * factor, MAX_ZOOM);
+    updateDisplay();
 }
 
 void ViewerWindow::zoomIn() {
-    m_fitMode = false;
-    m_zoomFactor = qMin(10.0, m_zoomFactor * 1.25);
-    updateDisplay();
+    zoomBy(1.25);
 }
 
 void ViewerWindow::zoomOut() {
-    m_fitMode = false;
-    m_zoomFactor = qMax(0.05, m_zoomFactor / 1.25);
-    updateDisplay();
+    zoomBy(1.0 / 1.25);
 }
 
 void ViewerWindow::zoomFit() {
@@ -447,36 +422,30 @@ void ViewerWindow::zoomOriginal() {
 
 void ViewerWindow::showPrevious() {
     if (m_currentIndex > 0) {
-        showImage(m_items, m_currentIndex - 1);
+        --m_currentIndex;
+        m_fitMode = true;
+        loadCurrentImage();
+        updateDisplay();
     }
 }
 
 void ViewerWindow::showNext() {
     if (m_currentIndex + 1 < m_items.size()) {
-        showImage(m_items, m_currentIndex + 1);
+        ++m_currentIndex;
+        m_fitMode = true;
+        loadCurrentImage();
+        updateDisplay();
     }
 }
 
 void ViewerWindow::copyFile() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    QString p = m_items[m_currentIndex].path;
-    if (ZipUtils::isZipPath(p)) {
-        p = ZipUtils::ensureExtracted(p);
-    }
-    if (p.isEmpty() || !QFile::exists(p)) return;
-
-    auto* mime = new QMimeData();
-    const QList<QUrl> urls = {QUrl::fromLocalFile(p)};
-    mime->setUrls(urls);
-    mime->setText(p);
-    const QByteArray gnomeData = "copy\n" + urls[0].toString().toUtf8();
-    mime->setData(QStringLiteral("x-special/gnome-copied-files"), gnomeData);
-    QApplication::clipboard()->setMimeData(mime);
+    FileActions::copyFilesToClipboard({m_items.at(m_currentIndex).path});
 }
 
 void ViewerWindow::copyPath() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    QApplication::clipboard()->setText(m_items[m_currentIndex].path);
+    QApplication::clipboard()->setText(m_items.at(m_currentIndex).path);
 }
 
 void ViewerWindow::copyImage() {
@@ -486,47 +455,30 @@ void ViewerWindow::copyImage() {
 
 void ViewerWindow::openDefaultViewer() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    QString p = m_items[m_currentIndex].path;
-    if (ZipUtils::isZipPath(p)) {
-        p = ZipUtils::ensureExtracted(p);
-    }
-    if (!p.isEmpty() && QFile::exists(p)) {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(p));
-    }
+    FileActions::openWithDefaultApp(m_items.at(m_currentIndex).path);
 }
 
 void ViewerWindow::toggleFavorite() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    auto& item = m_items[m_currentIndex];
-    emit favoriteToggled(m_currentIndex, item.path);
+    emit favoriteToggled(m_currentIndex, m_items.at(m_currentIndex).path);
 }
 
 void ViewerWindow::setFavoriteState(const QString& path, bool favorite) {
     for (auto& item : m_items) {
         if (item.path == path) item.isFavorite = favorite;
     }
-    if (m_currentIndex >= 0 && m_currentIndex < m_items.size() && m_items[m_currentIndex].path == path) {
+    if (m_currentIndex >= 0 && m_currentIndex < m_items.size() && m_items.at(m_currentIndex).path == path) {
         m_btnFav->setText(favorite ? QStringLiteral("★ Favorited") : QStringLiteral("⭐ Favorite"));
     }
 }
 
 void ViewerWindow::showInFolder() {
     if (m_currentIndex < 0 || m_currentIndex >= m_items.size()) return;
-    QString p = m_items[m_currentIndex].path;
-    QString zipPath;
-    if (ZipUtils::isZipPath(p, &zipPath)) {
-        p = zipPath; // Highlight the zip archive
-    }
-    const QFileInfo fi(p);
-    // Try dolphin, nautilus, fallback to xdg-open
-    if (!QProcess::startDetached(QStringLiteral("dolphin"), QStringList{QStringLiteral("--select"), p})) {
-        if (!QProcess::startDetached(QStringLiteral("nautilus"), QStringList{QStringLiteral("--select"), p})) {
-            QProcess::startDetached(QStringLiteral("xdg-open"), QStringList{fi.absolutePath()});
-        }
-    }
+    FileActions::revealInFileManager(m_items.at(m_currentIndex).path);
 }
 
 void ViewerWindow::keyPressEvent(QKeyEvent* event) {
+    const auto mods = event->modifiers() & ~Qt::KeypadModifier;
     switch (event->key()) {
     case Qt::Key_Left:
     case Qt::Key_Up:
@@ -558,25 +510,34 @@ void ViewerWindow::keyPressEvent(QKeyEvent* event) {
         return;
     case Qt::Key_F:
     case Qt::Key_S:
-        toggleFavorite();
-        return;
-    case Qt::Key_C:
-        if (event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier)) {
-            copyPath();
-        } else if (event->modifiers() == Qt::ControlModifier) {
-            copyFile();
+        if (mods == Qt::NoModifier) {
+            toggleFavorite();
+            return;
         }
-        return;
+        break;
+    case Qt::Key_C:
+        if (mods == (Qt::ControlModifier | Qt::ShiftModifier)) {
+            copyPath();
+            return;
+        }
+        if (mods == Qt::ControlModifier) {
+            copyFile();
+            return;
+        }
+        break;
     default:
-        QMainWindow::keyPressEvent(event);
+        break;
     }
+    QMainWindow::keyPressEvent(event);
 }
 
 void ViewerWindow::wheelEvent(QWheelEvent* event) {
-    if (event->angleDelta().y() > 0) {
-        zoomIn();
-    } else if (event->angleDelta().y() < 0) {
-        zoomOut();
+    // Reached only outside the scroll area; the viewport filter handles the rest.
+    m_wheelAccumulator += event->angleDelta().y();
+    const int steps = m_wheelAccumulator / 120;
+    if (steps != 0) {
+        m_wheelAccumulator -= steps * 120;
+        zoomBy(std::pow(1.25, steps));
     }
     event->accept();
 }
@@ -592,6 +553,17 @@ void ViewerWindow::showEvent(QShowEvent* event) {
     }
 }
 
+void ViewerWindow::hideEvent(QHideEvent* event) {
+    QMainWindow::hideEvent(event);
+    if (!event->spontaneous()) {
+        // Closed (not minimized): release the decoded image and pixmap.
+        m_currentImage = QImage();
+        m_imageLabel->clear();
+        m_currentIndex = -1;
+        m_items.clear();
+    }
+}
+
 void ViewerWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     if (m_fitMode) {
@@ -601,6 +573,18 @@ void ViewerWindow::resizeEvent(QResizeEvent* event) {
 
 bool ViewerWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_scrollArea->viewport() || watched == m_imageLabel) {
+        if (event->type() == QEvent::Wheel) {
+            // Zoom instead of letting the scroll area scroll.
+            auto* we = static_cast<QWheelEvent*>(event);
+            m_wheelAccumulator += we->angleDelta().y();
+            const int steps = m_wheelAccumulator / 120;
+            if (steps != 0) {
+                m_wheelAccumulator -= steps * 120;
+                zoomBy(std::pow(1.25, steps));
+            }
+            we->accept();
+            return true;
+        }
         if (event->type() == QEvent::MouseButtonDblClick) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {
@@ -615,15 +599,16 @@ bool ViewerWindow::eventFilter(QObject* watched, QEvent* event) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::LeftButton) {
                 m_panning = true;
-                m_panStartPos = me->globalPos();
+                m_panStartPos = globalPosOf(me);
                 m_scrollArea->viewport()->setCursor(Qt::ClosedHandCursor);
                 return true;
             }
         } else if (event->type() == QEvent::MouseMove) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (m_panning && (me->buttons() & Qt::LeftButton)) {
-                const QPoint delta = me->globalPos() - m_panStartPos;
-                m_panStartPos = me->globalPos();
+                const QPoint pos = globalPosOf(me);
+                const QPoint delta = pos - m_panStartPos;
+                m_panStartPos = pos;
                 m_scrollArea->horizontalScrollBar()->setValue(m_scrollArea->horizontalScrollBar()->value() - delta.x());
                 m_scrollArea->verticalScrollBar()->setValue(m_scrollArea->verticalScrollBar()->value() - delta.y());
                 return true;

@@ -38,12 +38,13 @@ public:
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    void setItems(const QVector<ImageRecord>& items);
+    void setItems(QVector<ImageRecord> items);
     const ImageRecord* getItem(int row) const;
+    const QVector<ImageRecord>& items() const { return m_items; }
     int rowForPath(const QString& path) const;
 
     void updateItemFeatures(const QString& path, const ImageFeatures& feat);
-    void setItemFavorite(int row, bool fav);
+    void setItemFavorite(const QString& path, bool fav);
 
 private:
     QVector<ImageRecord> m_items;

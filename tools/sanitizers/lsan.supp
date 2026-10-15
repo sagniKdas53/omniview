@@ -1,0 +1,5 @@
+# LeakSanitizer suppressions for third-party code only.
+# Qt 5.15's offscreen platform plugin never frees its screen/cursor objects
+# (QOffscreenIntegration); these are one-off allocations made at
+# QGuiApplication start-up, not leaks in OmniView.
+leak:libqoffscreen.so

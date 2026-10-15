@@ -2,18 +2,25 @@
 #include <QCommandLineParser>
 #include <QIcon>
 #include <QFileInfo>
+#include <QDebug>
 #include <QDir>
 #include "MainWindow.h"
 #include "Config.h"
+#include "ColorUtils.h"
 
 int main(int argc, char* argv[]) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+    // Always on in Qt 6 (the attributes are deprecated no-ops there).
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling, true);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps, true);
+#endif
 
     QApplication app(argc, argv);
     app.setApplicationName(OmniView::Config::appName());
     app.setApplicationDisplayName(OmniView::Config::appTitle());
+    app.setApplicationVersion(QStringLiteral(OMNIVIEW_VERSION));
     app.setDesktopFileName(QStringLiteral("omniview.desktop"));
+    OmniView::ColorUtils::configureImageIO();
 
     // Register custom types for cross-thread Qt signal/slot delivery
     qRegisterMetaType<OmniView::Stats>("OmniView::Stats");
@@ -84,8 +91,11 @@ int main(int argc, char* argv[]) {
 
     const QStringList args = parser.positionalArguments();
     QString targetDir = args.isEmpty() ? OmniView::Config::defaultRootDir() : args.first();
-    if (!QDir(targetDir).exists()) {
-        targetDir = QDir::homePath();
+    if (!QFileInfo(targetDir).isDir()) {
+        // A typo or a file path must not silently index the whole home folder.
+        qWarning().noquote() << "Not a directory:" << targetDir
+                             << "- opening" << OmniView::Config::defaultRootDir() << "instead";
+        targetDir = OmniView::Config::defaultRootDir();
     }
 
     OmniView::MainWindow window(targetDir);
