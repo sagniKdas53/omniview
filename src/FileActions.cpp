@@ -4,7 +4,6 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDesktopServices>
-#include <QDir>
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QMimeData>
@@ -93,12 +92,7 @@ bool revealInFileManager(const QString& path) {
         target = zipPath; // highlight the archive itself
     }
     const QFileInfo fi(target);
-#if defined(Q_OS_WIN)
-    return QProcess::startDetached(QStringLiteral("explorer.exe"),
-        {QStringLiteral("/select,") + QDir::toNativeSeparators(fi.absoluteFilePath())});
-#elif defined(Q_OS_MACOS)
-    return QProcess::startDetached(QStringLiteral("open"), {QStringLiteral("-R"), fi.absoluteFilePath()});
-#else
+    // Linux only: file managers that can select the file, else open its folder.
     if (QProcess::startDetached(QStringLiteral("dolphin"), {QStringLiteral("--select"), fi.absoluteFilePath()})) {
         return true;
     }
@@ -106,7 +100,6 @@ bool revealInFileManager(const QString& path) {
         return true;
     }
     return QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
-#endif
 }
 
 bool openWithDefaultApp(const QString& path) {

@@ -26,9 +26,8 @@ bool copyFilesToClipboard(const QStringList& paths);
 // Drag preview: the thumbnail on a rounded card, plus a "N files" pill.
 QPixmap makeDragBadge(const QPixmap& thumbnail, int fileCount);
 
-// Shows the file (or, for archive entries, the archive) in the platform file
-// manager: Explorer on Windows, Finder on macOS, Dolphin/Nautilus/xdg-open on
-// Linux.
+// Shows the file (or, for archive entries, the archive) in the file manager:
+// Dolphin or Nautilus with the file selected, else its folder via xdg-open.
 bool revealInFileManager(const QString& path);
 
 // Opens the file (extracting archive entries first) with the default app.

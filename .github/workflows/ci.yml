@@ -1,4 +1,4 @@
-name: OmniView Multi-Platform CI
+name: OmniView CI (Linux)
 
 on:
   push:
@@ -13,36 +13,15 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    name: Linux (Ubuntu x86_64)
+    runs-on: ubuntu-22.04
     env:
       QT_QPA_PLATFORM: offscreen
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux (Ubuntu x86_64)
-            os: ubuntu-22.04
-            platform: linux
-            artifact_name: omniview-linux-x86_64
-
-          - name: macOS (Apple Silicon / Intel)
-            os: macos-latest
-            platform: macos
-            artifact_name: omniview-macos
-
-          - name: Windows (x64 MSVC)
-            os: windows-2022
-            platform: windows
-            artifact_name: omniview-windows-x64
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- Linux dependencies ---
-      - name: Install Linux dependencies
-        if: matrix.platform == 'linux'
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -54,116 +33,25 @@ jobs:
             qt5-image-formats-plugins \
             qttools5-dev-tools
 
-      # --- macOS dependencies ---
-      - name: Install macOS dependencies
-        if: matrix.platform == 'macos'
-        run: |
-          brew install cmake ninja qt
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -G Ninja
 
-      # --- Windows Qt setup ---
-      - name: Install Windows Qt
-        if: matrix.platform == 'windows'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: 'win64_msvc2022_64'
-          # WebP support for the shared thumbnail cache format.
-          modules: 'qtimageformats'
+      - name: Build OmniView
+        run: cmake --build build --parallel
 
-      # --- Configure CMake ---
-      - name: Configure CMake (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          cmake -B build -S . \
-            -DCMAKE_BUILD_TYPE=Release \
-            -G "Ninja"
+      - name: Run Tests
+        run: ctest --test-dir build --output-on-failure
 
-      - name: Configure CMake (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          cmake -B build -S . \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" \
-            -G "Ninja"
-
-      - name: Configure CMake (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-      # --- Build ---
-      - name: Build OmniView (Unix)
-        if: matrix.platform != 'windows'
-        run: |
-          cmake --build build --parallel
-
-      - name: Build OmniView (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          cmake --build build --config Release --parallel
-
-      # Deploy the runtime next to test executables before CTest launches them.
-      - name: Deploy Windows test runtime
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          windeployqt --release --no-translations build\Release\omniview_tests.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($t in @('database_regression_tests', 'imaging_tests', 'zip_scanner_tests', 'thumbnail_tests', 'ui_tests')) {
-            windeployqt --release --no-translations "build\Release\$t.exe"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
-      # --- Run Tests ---
-      - name: Run Tests (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          ctest --test-dir build --output-on-failure
-
-      - name: Run Tests (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          ctest --test-dir build --output-on-failure
-
-      - name: Run Tests (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          ctest --test-dir build -C Release --output-on-failure --verbose
-          $testExit = $LASTEXITCODE
-          $results = Get-ChildItem build -Filter '*-results.txt' -ErrorAction SilentlyContinue
-          foreach ($r in $results) {
-            Write-Output "===== $($r.Name) ====="
-            Get-Content $r.FullName
-          }
-          exit $testExit
-
-      # --- Package Artifacts ---
-      - name: Prepare Linux Package
-        if: matrix.platform == 'linux'
+      - name: Prepare Package
         run: |
           mkdir -p dist
           cp build/omniview-cpp dist/omniview
           chmod +x dist/omniview
 
-      - name: Prepare macOS Package
-        if: matrix.platform == 'macos'
-        run: |
-          mkdir -p dist
-          cp build/omniview-cpp dist/omniview-macos
-          chmod +x dist/omniview-macos
-
-      - name: Prepare Windows Package
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item build\Release\omniview-cpp.exe -Destination dist\omniview.exe
-          windeployqt --release --no-translations --no-opengl-sw dist\omniview.exe
-
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: omniview-linux-x86_64
           path: dist/
           if-no-files-found: error
 

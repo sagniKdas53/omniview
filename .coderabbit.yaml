@@ -25,7 +25,7 @@ reviews:
       instructions: |
         OmniView is a C++17 Qt 5 / Qt 6 image gallery. Every change must build and
         behave the same on both Qt 5.15 and Qt 6 (guard API differences with
-        QT_VERSION_CHECK) and on Linux (X11 and Wayland), macOS and Windows.
+        QT_VERSION_CHECK) on Linux (X11 and Wayland), the only supported platform.
         Focus on:
         - Threading: which objects run on QThreadPool / Scanner threads vs the GUI
           thread; QObject thread affinity; QPixmap/widgets only on the GUI thread;
@@ -68,7 +68,8 @@ reviews:
         OMNIVIEW_SANITIZE.
     - path: ".github/workflows/**"
       instructions: |
-        CI must keep building and testing on Linux, macOS and Windows plus the Linux
-        sanitizer matrix. Do not suggest disabling tests or sanitizer checks.
+        CI is Linux-only by design (macOS and Windows are not supported): one release
+        build plus the Qt 5 / Qt 6 sanitizer matrix. Do not suggest disabling tests or
+        sanitizer checks.
 chat:
   auto_reply: true

@@ -11,11 +11,7 @@ set(CMAKE_AUTOUIC ON)
 option(OMNIVIEW_WARNINGS "Enable extra compiler warnings on OmniView's own sources" OFF)
 option(OMNIVIEW_WARNINGS_AS_ERRORS "Treat warnings on OmniView's own sources as errors" OFF)
 set(OMNIVIEW_SANITIZE "" CACHE STRING
-    "Sanitizers to build with: empty, 'address;undefined' or 'thread' (GCC/Clang only)")
-
-if(MSVC)
-    add_compile_options(/utf-8)
-endif()
+    "Sanitizers to build with: empty, 'address;undefined' or 'thread'")
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Concurrent Test)
@@ -26,9 +22,6 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Sql Conc
 if(OMNIVIEW_SANITIZE)
     # Accept "address,undefined" as well as "address;undefined".
     string(REPLACE "," ";" OMNIVIEW_SANITIZE "${OMNIVIEW_SANITIZE}")
-    if(MSVC)
-        message(FATAL_ERROR "OMNIVIEW_SANITIZE is only supported with GCC/Clang")
-    endif()
     if("thread" IN_LIST OMNIVIEW_SANITIZE AND "address" IN_LIST OMNIVIEW_SANITIZE)
         message(FATAL_ERROR "ThreadSanitizer cannot be combined with AddressSanitizer")
     endif()
@@ -50,17 +43,10 @@ function(omniview_enable_warnings target)
     if(NOT OMNIVIEW_WARNINGS)
         return()
     endif()
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /W4)
-        if(OMNIVIEW_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE /WX)
-        endif()
-    else()
-        target_compile_options(${target} PRIVATE
-            -Wall -Wextra -Wpedantic -Wshadow -Wconversion)
-        if(OMNIVIEW_WARNINGS_AS_ERRORS)
-            target_compile_options(${target} PRIVATE -Werror)
-        endif()
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic -Wshadow -Wconversion)
+    if(OMNIVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(${target} PRIVATE -Werror)
     endif()
 endfunction()
 
@@ -114,17 +100,14 @@ function(omniview_add_test name source)
     add_executable(${name} ${source} tests/TestSupport.h)
     target_link_libraries(${name} PRIVATE omniview_core Qt${QT_VERSION_MAJOR}::Test)
     omniview_enable_warnings(${name})
-    # Results also go to a file so CI can show them (Windows ctest output
-    # does not include QtTest's stdout).
-    add_test(NAME ${name} COMMAND ${name} -o -,txt -o ${name}-results.txt,txt)
+    add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "${OMNIVIEW_TEST_ENV}" TIMEOUT 300)
 endfunction()
 
-# Historic name kept for the Windows CI artefact step.
 add_executable(omniview_tests tests/test_omniview.cpp tests/TestSupport.h)
 target_link_libraries(omniview_tests PRIVATE omniview_core Qt${QT_VERSION_MAJOR}::Test)
 omniview_enable_warnings(omniview_tests)
-add_test(NAME OmniViewTests COMMAND omniview_tests -o -,txt -o omniview-test-results.txt,txt)
+add_test(NAME OmniViewTests COMMAND omniview_tests)
 set_tests_properties(OmniViewTests PROPERTIES ENVIRONMENT "${OMNIVIEW_TEST_ENV}" TIMEOUT 300)
 
 omniview_add_test(database_regression_tests tests/test_database_regressions.cpp)
