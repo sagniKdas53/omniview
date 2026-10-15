@@ -106,8 +106,19 @@ bool Config::migrateCacheDir(const QString& from, const QString& to) {
         }
     }
     QSqlDatabase::removeDatabase(conn);
-    // Thumbnails are found by their canonical name either way, so a failed
-    // path update only costs regeneration, never data.
+    if (!ok) {
+        // Undo, so the old cache stays intact and the next start retries.
+        if (moved) {
+            if (!QDir().rename(to, from)) {
+                qWarning() << "Could not roll back the cache move from" << to << "to" << from;
+            }
+        } else {
+            for (const char* suffix : {"", "-journal", "-wal", "-shm"}) {
+                QFile::remove(toDb + QLatin1String(suffix));
+            }
+        }
+        return false;
+    }
     return true;
 }
 

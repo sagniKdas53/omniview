@@ -381,6 +381,12 @@ int Database::pruneMissingFiles(const QString& rootDir, const ScanObservation* o
             return 0;
         }
     }
+    // A scan cancelled while the batch was written (root switched, app
+    // closing) must not commit it.
+    if (isCancelled && isCancelled()) {
+        db.rollback();
+        return 0;
+    }
 
     if (!db.commit()) {
         db.rollback();

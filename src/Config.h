@@ -22,7 +22,8 @@ public:
     // differs from defaultCacheDir() on macOS, Windows and with XDG_CACHE_HOME.
     static QString previousDefaultCacheDir();
     // Moves (or, if that is impossible, copies) a cache from `from` to `to`
-    // and rewrites stored thumbnail paths. Refuses to overwrite an index.
+    // and rewrites stored thumbnail paths. Refuses to overwrite an index; on
+    // failure the old cache is left (or put back) as it was.
     static bool migrateCacheDir(const QString& from, const QString& to);
     static QString thumbnailsDir();
     static QString legacyThumbnailsDir();

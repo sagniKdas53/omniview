@@ -38,7 +38,7 @@ Clang's sanitizer runtime is not installed in this container, so sanitizer build
 | Check | Baseline (61a2d90) | After this PR |
 |---|---|---|
 | Build Qt 5 / Qt 6 | ✅ / ✅ (Qt 6: 10 deprecation warnings) | ✅ / ✅ (0 warnings) |
-| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 116 test functions) |
+| ctest Qt 5 / Qt 6 | 2/2 suites pass (23 test functions) | 7/7 ctest entries pass (6 suites + HiDPI viewer run; 118 test functions) |
 | Warnings build (`-Wall -Wextra -Wpedantic -Wshadow -Wconversion`, unique) | Qt 5: **6**, Qt 6: **17** | Qt 5: **0**, Qt 6: **0** |
 | ASan+UBSan Qt 6 | 0 reports | 0 reports |
 | ASan+UBSan Qt 5 | **1** LeakSanitizer report (7 allocations, all in Qt's `libqoffscreen`) → suite fails | 0 (leak suppressed by library name, third-party only) |
@@ -129,7 +129,7 @@ Line numbers refer to the baseline commit.
 | M24 | `ColorUtils.cpp:176` | A null scaled image (OOM, empty size) was dereferenced → segfault on a worker thread. | Null checks. | Fixed, T |
 | M25 | `ColorUtils.cpp:171` | Transparent pixels counted as black (logos/stickers classified "black"). | Alpha-weighted mean; fully transparent → gray. | Fixed, T |
 | M26 | `ColorUtils.cpp:209` | WebP→JPEG fallback reused the failed `QImageWriter` (still WebP), so it never worked when a WebP handler existed but failed. | Fresh writer; one warning when WebP is unavailable. JPEG bytes keep the shared `.webp` name (owner decision: keep, so thumbnails still persist without the plugin); CI installs the image-formats plugins. | Fixed, R |
-| M27 | `ColorUtils.cpp:191` | dHash is not value-compatible with the Rust/Python apps sharing the DB (luma formula, orientation, source resolution): near-duplicates indexed by different apps never match. Owner decision: the C++ definition is the reference (Python is unmaintained, Rust on hold): Rec.601 integer luma on the thumbnail. | Decided |
+| M27 | `ColorUtils.cpp:191` | dHash is not value-compatible with the Rust/Python apps sharing the DB (luma formula, orientation, source resolution): near-duplicates indexed by different apps never match. | Owner decision: the C++ definition is the reference (Python is unmaintained, Rust on hold): Rec.601 integer luma on the thumbnail. | Decided |
 | M28 | `Config.cpp:34` | `GenericCacheLocation` ≠ the Rust app's hard-coded `~/.cache/omniview` whenever `XDG_CACHE_HOME` is set, and always on macOS/Windows: no sharing there. | `~/.cache/omniview` everywhere (owner decision). A cache in the old location is moved on first start (copied if the move is impossible) and stored thumbnail paths are rewritten. | Fixed, T |
 | M29 | `MainWindow.cpp:801` | File events during a scan were dropped. | Pending-rescan flag re-runs the scan when the current one finishes. | Fixed, R |
 | M30 | `MainWindow.cpp:789` | Only the root and its first 199 top-level folders were watched. | `LibraryWatcher`: recursive (non-hidden, no symlinks), capped at 4096 dirs, failures surfaced in the status bar. | Fixed, T |

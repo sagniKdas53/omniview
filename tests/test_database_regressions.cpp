@@ -509,6 +509,46 @@ private slots:
         QVERIFY(!db.hasDecodeFailure(path, 200.0, 11)); // decoded after all (e.g. plugin installed)
     }
 
+    void pruneCancelledBeforeCommitRollsBack() {
+        QTemporaryDir dir;
+        Database db(dir.filePath(QStringLiteral("index.db")));
+        QVERIFY(db.initSchema());
+        const QString root = dir.filePath(QStringLiteral("r"));
+        QVERIFY(QDir().mkpath(root));
+        QVERIFY(db.batchSyncFiles({row(root + QStringLiteral("/a.png"), QString()),
+                                   row(root + QStringLiteral("/b.png"), QString())}));
+        // Not cancelled while rows are checked (one call per row plus one
+        // after the scan), cancelled by the time the batch would commit.
+        int calls = 0;
+        QCOMPARE(db.pruneMissingFiles(root, nullptr, [&calls]() { return ++calls > 3; }), 0);
+        QCOMPARE(db.getStats().totalImages, 2);
+    }
+
+    void failedCacheMigrationIsRolledBack() {
+        QTemporaryDir dir;
+        const QString from = dir.filePath(QStringLiteral("old/omniview"));
+        const QString to = dir.filePath(QStringLiteral("home/.cache/omniview"));
+        touch(from + QStringLiteral("/thumbnails/abc.webp"));
+        {
+            // An index the path rewrite cannot update (no images table).
+            const QString conn = QStringLiteral("odd_index");
+            {
+                QSqlDatabase raw = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                raw.setDatabaseName(from + QStringLiteral("/omniview_index.db"));
+                QVERIFY(raw.open());
+                QSqlQuery q(raw);
+                QVERIFY(q.exec(QStringLiteral("CREATE TABLE other (x INTEGER)")));
+                q.finish();
+                raw.close();
+            }
+            QSqlDatabase::removeDatabase(conn);
+        }
+        QVERIFY(!Config::migrateCacheDir(from, to));
+        QVERIFY(QFile::exists(from + QStringLiteral("/omniview_index.db"))); // moved back
+        QVERIFY(QFile::exists(from + QStringLiteral("/thumbnails/abc.webp")));
+        QVERIFY(!QFile::exists(to + QStringLiteral("/omniview_index.db")));
+    }
+
     void defaultCacheDirIsHomeDotCache() {
         QCOMPARE(Config::defaultCacheDir(), QDir::homePath() + QStringLiteral("/.cache/omniview"));
     }
