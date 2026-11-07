@@ -13,3 +13,14 @@ called_from_lib:libQt6Core.so.6
 called_from_lib:libQt6Gui.so.6
 called_from_lib:libQt5Test.so.5
 called_from_lib:libQt6Test.so.6
+
+# Side effect of the Qt 6 lines above, on the mutex behind a contended
+# QReadWriteLock (QSqlDatabase's global connection table has one). The lock is
+# called from libQt6Core, so it is ignored, but QReadWriteLock::unlock() reaches
+# pthread_mutex_unlock with a tail call, so TSan attributes the unlock to whoever
+# called unlock() and sees it unmatched. A program with no OmniView code
+# reproduces this. `mutex:` only silences mutex-misuse reports, never data races.
+# closeConnection() is named because QSqlDatabase::removeDatabase() tail-calls
+# too, which leaves no Qt frame in that stack.
+mutex:QSqlDatabase
+mutex:OmniView::Database::closeConnection
