@@ -3,11 +3,13 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
 
 #include <memory>
+#include <utility>
 
 #include "Config.h"
 #include "Database.h"
@@ -86,6 +88,30 @@ private slots:
         const int position = static_cast<int>(order.indexOf(paths.first()));
         QVERIFY2(position < 40, qPrintable(QStringLiteral("visible card finished at %1").arg(position)));
         mgr.cancelPending();
+    }
+
+    // No rows exist for these paths, so each task reports straight back and
+    // the worker-to-owner hand-off is nearly all the work. Under TSan this also
+    // exercises that hand-off far harder than decoding real images does.
+    void everyResultReachesTheOwnerThread() {
+        QTemporaryDir tmp;
+        Database db(tmp.filePath(QStringLiteral("index.db")));
+        QVERIFY(db.initSchema());
+        ThumbnailManager mgr(db.dbPath());
+        QSignalSpy ready(&mgr, &ThumbnailManager::thumbnailReady);
+        QSet<QString> expected;
+        for (int i = 0; i < 1000; ++i) {
+            const QString path = tmp.filePath(QStringLiteral("missing_%1.png").arg(i));
+            expected.insert(path);
+            mgr.requestPriorityThumbnail(path);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(ready.count(), expected.size(), 120000);
+        QSet<QString> delivered;
+        for (const QList<QVariant>& args : std::as_const(ready)) {
+            delivered.insert(args.at(0).toString());
+        }
+        QVERIFY(delivered == expected);
+        QCOMPARE(mgr.pendingCount(), 0);
     }
 
     void failedImagesAreNotRetriedUntilTheyChange() {
