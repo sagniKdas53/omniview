@@ -126,6 +126,10 @@ ThumbnailManager::~ThumbnailManager() {
     // task (potentially tens of thousands) before the process can exit.
     cancelPending();
     m_threadPool.waitForDone();
+    // The guarded members are destroyed next, and a task may have used them
+    // since the lock in cancelPending(). waitForDone() orders that, but inside
+    // Qt where TSan cannot see it; taking the lock here makes the order visible.
+    const std::lock_guard<std::mutex> lock(m_mutex);
 }
 
 int ThumbnailManager::pendingCount() const {
