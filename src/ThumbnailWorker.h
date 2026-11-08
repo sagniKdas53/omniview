@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QCache>
 #include <QPixmap>
+#include <QQueue>
 #include <atomic>
 #include <mutex>
 #include "ColorUtils.h"
@@ -45,8 +46,8 @@ private:
 // Threading contract: every public method must be called on the thread that
 // owns the manager (the GUI thread). Tasks only touch the manager through
 // taskStarting()/taskFinished(), which are thread-safe; results are delivered
-// back to the owner thread with a queued call, so QPixmaps are only ever
-// created there.
+// back to the owner thread through a mutex-guarded queue and a queued signal,
+// so QPixmaps are only ever created there.
 class ThumbnailManager : public QObject {
     Q_OBJECT
 public:
@@ -76,10 +77,22 @@ public:
 signals:
     void thumbnailReady(const QString& sourcePath, const QString& thumbPath, const OmniView::ImageFeatures& feat);
     void allCompleted();
+    // Emitted on a pool thread once per queued result. Keeps the wake-up free of
+    // captured data: a queued lambda or invokeMethod() would be built or read in
+    // instrumented code, and TSan cannot see the synchronisation in Qt's event
+    // queue, so it reports that as a race.
+    void resultAvailable(QPrivateSignal);
 
 private:
     friend class ThumbnailTask;
     struct FileVersion {
+        double mtime = 0.0;
+        qint64 fileSize = 0;
+    };
+    struct TaskResult {
+        QString sourcePath;
+        ImageFeatures feat;
+        Outcome outcome = Outcome::Stale;
         double mtime = 0.0;
         qint64 fileSize = 0;
     };
@@ -88,17 +101,19 @@ private:
     bool taskStarting(ThumbnailTask* task);
     void taskFinished(const QString& sourcePath, const ImageFeatures& feat, Outcome outcome,
                       double mtime, qint64 fileSize);
+    void deliverNextResult();
     void handleResult(const QString& sourcePath, const ImageFeatures& feat, Outcome outcome,
                       double mtime, qint64 fileSize);
 
     QString m_dbPath;
     QThreadPool m_threadPool;
 
-    // Guarded by m_mutex (touched from pool threads in taskStarting()).
-    // std::mutex rather than QMutex so ThreadSanitizer can see the locking
-    // on Qt 5 too (Qt 5's QMutex is not annotated for TSan).
+    // Guarded by m_mutex (touched from pool threads in taskStarting() and
+    // taskFinished()). std::mutex rather than QMutex so ThreadSanitizer can see
+    // the locking on Qt 5 too (Qt 5's QMutex is not annotated for TSan).
     mutable std::mutex m_mutex;
     QHash<QString, ThumbnailTask*> m_queued; // queued, not yet started
+    QQueue<TaskResult> m_results;            // finished, not yet delivered
     quint64 m_generation = 0;
 
     // Owner-thread only.

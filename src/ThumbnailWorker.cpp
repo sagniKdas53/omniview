@@ -4,7 +4,6 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QImageReader>
-#include <QMetaObject>
 #include <QThread>
 
 #include <utility>
@@ -118,6 +117,8 @@ ThumbnailManager::ThumbnailManager(const QString& dbPath, QObject* parent)
 {
     m_threadPool.setMaxThreadCount(qMax(2, qMin(8, QThread::idealThreadCount())));
     m_memCache.setMaxCost(MEMORY_CACHE_KIB);
+    connect(this, &ThumbnailManager::resultAvailable, this, &ThumbnailManager::deliverNextResult,
+            Qt::QueuedConnection);
 }
 
 ThumbnailManager::~ThumbnailManager() {
@@ -125,6 +126,10 @@ ThumbnailManager::~ThumbnailManager() {
     // task (potentially tens of thousands) before the process can exit.
     cancelPending();
     m_threadPool.waitForDone();
+    // The guarded members are destroyed next, and a task may have used them
+    // since the lock in cancelPending(). waitForDone() orders that, but inside
+    // Qt where TSan cannot see it; taking the lock here makes the order visible.
+    const std::lock_guard<std::mutex> lock(m_mutex);
 }
 
 int ThumbnailManager::pendingCount() const {
@@ -152,9 +157,22 @@ bool ThumbnailManager::taskStarting(ThumbnailTask* task) {
 
 void ThumbnailManager::taskFinished(const QString& sourcePath, const ImageFeatures& feat,
                                     Outcome outcome, double mtime, qint64 fileSize) {
-    QMetaObject::invokeMethod(this, [this, sourcePath, feat, outcome, mtime, fileSize]() {
-        handleResult(sourcePath, feat, outcome, mtime, fileSize);
-    }, Qt::QueuedConnection);
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_results.enqueue(TaskResult{sourcePath, feat, outcome, mtime, fileSize});
+    }
+    emit resultAvailable(QPrivateSignal());
+}
+
+void ThumbnailManager::deliverNextResult() {
+    TaskResult result;
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_results.isEmpty()) return;
+        result = m_results.dequeue();
+    }
+    // One result per wake-up, outside the lock: slots may run nested event loops.
+    handleResult(result.sourcePath, result.feat, result.outcome, result.mtime, result.fileSize);
 }
 
 void ThumbnailManager::handleResult(const QString& sourcePath, const ImageFeatures& feat,

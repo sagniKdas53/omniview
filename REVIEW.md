@@ -51,9 +51,12 @@ TSan triage (baseline): 1 real test-harness race (QSignalSpy written from the Sc
 `wait()` reads it on the main thread); everything else was new/delete/memmove inside Qt's own
 uninstrumented image-scaling thread pool and QtTest's watchdog. During the fixes TSan also found that
 Qt 5's `QMutex` is invisible to TSan (not annotated, unlike Qt 6) — the thumbnail manager now uses
-`std::mutex`, and the runnable hand-off uses an explicit release/acquire atomic. The suppression file
-(`tools/sanitizers/tsan.supp`) only contains `called_from_lib:` entries for Qt libraries, so any race in
-OmniView's instrumented code is still reported.
+`std::mutex`, and the runnable hand-off uses an explicit release/acquire atomic. Results return through
+a `std::mutex`-guarded queue and a queued signal, because TSan cannot see the synchronisation in Qt's
+event queue and intermittently reported a queued lambda's captures as a race. The suppression file
+(`tools/sanitizers/tsan.supp`) contains `called_from_lib:` entries for Qt libraries and two `mutex:`
+entries for a false "unlock of an unlocked mutex" those entries cause on Qt 6's `QReadWriteLock`. It has
+no `race:` entries, so any race in OmniView's instrumented code is still reported.
 
 ### Vendored miniz
 
@@ -225,7 +228,7 @@ Line numbers refer to the baseline commit.
 - **Ownership:** `Database` owns exactly one connection (RAII, non-copyable); scanners are parented and
   `deleteLater`ed; runnables never outlive `ThumbnailManager` (queue cleared + waited in its destructor).
 - **Threading contract** documented in `ThumbnailWorker.h`: only `taskStarting/taskFinished` cross threads;
-  results come back with a queued call; QPixmaps exist only on the GUI thread.
+  results come back through a guarded queue and a queued signal; QPixmaps exist only on the GUI thread.
 - **CMake:** `omniview_core` static library shared by the app and tests (sources were compiled 2–3×);
   vendored miniz built as its own target; `OMNIVIEW_WARNINGS`, `OMNIVIEW_WARNINGS_AS_ERRORS`,
   `OMNIVIEW_SANITIZE` (all off by default, warnings on project targets only); install rule; version macro.
